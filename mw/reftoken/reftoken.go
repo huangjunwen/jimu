@@ -39,8 +39,8 @@ type Manager struct {
 	next http.Handler
 }
 
-// New creates a new reftoken manager.
-func New(store KVStore, next http.Handler) *Manager {
+// NewManager creates a new reftoken manager.
+func NewManager(store KVStore, next http.Handler) *Manager {
 
 	return &Manager{
 		store:            store,
@@ -51,8 +51,8 @@ func New(store KVStore, next http.Handler) *Manager {
 	}
 }
 
-// SetTTL set default ttl for kv.
-func (m *Manager) SetTTL(ttl int) {
+// SetTokenTTL set default ttl for tokens.
+func (m *Manager) SetTokenTTL(ttl int) {
 	if ttl > 0 {
 		m.ttl = ttl
 	}
@@ -74,122 +74,149 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lg := logger.Logger(r)
 
-	// handleRequest translate ref tokens to real tokens and return ref tokens.
-	handleRequest := func() []string {
+	// Apply ref 2 real token rules. Return ref tokens.
+	applyRulesToRequest := func() []string {
 
-		refTokens := []string{}
 		realTokenHeaderNames := []string{}
+		refTokens := []string{}
 
 		for _, rule := range m.ref2RealRules {
 
-			// !!! Make sure real token header name is NOT present in request to
-			// avoid fake ones.
+			// Extract ref token from request.
 			realTokenHeaderName := rule.realTokenHeaderName
+			refToken := rule.refTokenGetter(r)
+
+			// !!! Ensure there is no header name using realTokenHeaderName
+			// to avoid fake ones.
 			delete(r.Header, realTokenHeaderName)
 
-			// Try to extract ref token.
-			refToken := rule.refTokenGetter(r)
+			// Ignore empty.
 			if refToken == "" {
 				continue
 			}
 
+			// Append to array for later batch process.
 			realTokenHeaderNames = append(realTokenHeaderNames, realTokenHeaderName)
 			refTokens = append(refTokens, refToken)
+
 		}
 
-		// Translate to real tokens and set to request header.
-		if len(realTokenHeaderNames) != 0 {
-			realTokens, err := m.store.Get(refTokens)
-			if err == nil {
-				for i, realTokenHeaderName := range realTokenHeaderNames {
-					r.Header[realTokenHeaderName] = []string{realTokens[i]}
-				}
-			} else {
-				lg.Error().Err(err).Str("src", "reftoken:get").Msg("")
+		// Ref token not found.
+		if len(refTokens) == 0 {
+			return nil
+		}
+
+		// Translate ref tokens to real tokens.
+		realTokens, err := m.store.Get(refTokens)
+		if err != nil {
+			lg.Error().Err(fmt.Errorf("KVStore.Get: %s", err)).Str("src", "reftoken").Msg("")
+			return nil
+		}
+
+		// Should never happen.
+		if len(realTokens) != len(realTokenHeaderNames) {
+			panic(fmt.Errorf("len(realTokens)(%d) != len(realTokenHeaderNames)(%d)",
+				len(realTokens), len(realTokenHeaderNames)))
+		}
+
+		// Set real tokens to header.
+		existRefTokens := []string{}
+		for i, realToken := range realTokens {
+			// Ignore empty.
+			if realToken == "" {
+				continue
 			}
+			r.Header[realTokenHeaderNames[i]] = []string{realToken}
+			existRefTokens = append(existRefTokens, refTokens[i])
 		}
 
-		return refTokens
+		return existRefTokens
 
 	}
 
-	currentRefTokens := handleRequest()
+	existRefTokens := applyRulesToRequest()
 
 	handleLogout := func(h http.Header) {
-
 		if _, ok := h[m.logoutHeaderName]; !ok {
 			return
 		}
 		delete(h, m.logoutHeaderName)
-
-		// Logout all at once.
-		if err := m.store.Del(currentRefTokens); err != nil {
-			lg.Error().Err(err).Str("src", "reftoken:del").Msg("")
+		if err := m.store.Del(existRefTokens); err != nil {
+			lg.Error().Err(fmt.Errorf("KVStore.Del: %s", err)).Str("src", "reftoken").Msg("")
 		}
-
 	}
 
-	handleResponseHeader := func(h http.Header) {
+	applyRulesToResponseHeader := func(h http.Header) {
 
-		// Handle logout logic.
 		handleLogout(h)
 
-		// Determin ttl.
-		ttl := m.ttl
-		v := h[m.ttlHeaderName]
-		if len(v) != 0 {
-			ttl, _ = strconv.Atoi(v[0])
+		// Since headers here are already canonical, no need to
+		// call h.Get()
+		getHeader := func(headerName string) string {
+			v := h[headerName]
+			if len(v) == 0 {
+				return ""
+			}
+			return v[0]
 		}
 
-		// Handler real tokens.
+		// Determin ttl.
+		ttl, _ := strconv.Atoi(getHeader(m.ttlHeaderName))
+		if ttl <= 0 {
+			ttl = m.ttl
+		}
+
 		refTokenSetters := []RefTokenSetter{}
 		refTokens := []string{}
-		kvs := []KV{}
+		kvs := map[string]string{}
 
 		for _, rule := range m.real2RefRules {
 
-			// Extract real token.
+			// Extract real token from response header.
 			realTokenHeaderName := rule.realTokenHeaderName
-			realToken := ""
-			v := h[realTokenHeaderName]
-			if len(v) != 0 {
-				realToken = v[0]
-			}
+			realToken := getHeader(realTokenHeaderName)
 
-			// !!! Make sure real token headers are NOT present in response
-			// to avoid sensitive information leaking.
+			// !!! Ensure there is no realTokenHeaderName in header
+			// to avoid information leak.
 			delete(h, realTokenHeaderName)
 
-			// Ignore empty real token.
+			// Ignore empty.
 			if realToken == "" {
 				continue
 			}
 
-			// Generate ref token for the real token.
+			// Generate ref token -> real token.
 			refToken := m.generateRefToken(realToken)
 
-			// Push to array for later batch operation.
+			// Append to array for later batch process.
 			refTokenSetters = append(refTokenSetters, rule.refTokenSetter)
 			refTokens = append(refTokens, refToken)
-			kvs = append(kvs, KV{Key: refToken, Value: realToken})
+			kvs[refToken] = realToken
 
 		}
 
-		if len(kvs) != 0 {
-			if err := m.store.Set(kvs, ttl); err == nil {
+		// If any.
+		if len(refTokens) != 0 {
+
+			if err := m.store.Set(kvs, ttl); err != nil {
+
+				lg.Error().Err(fmt.Errorf("KVStore.Set: %s", err)).Str("src", "reftoken").Msg("")
+
+			} else {
+
 				for i, refToken := range refTokens {
 					refTokenSetters[i](h, refToken)
 				}
-			} else {
-				logger.Logger(r).Error().Err(err).Str("src", "reftoken").Msg("")
+
 			}
+
 		}
 
 	}
 
 	m.next.ServeHTTP(&responseWriterProxy{
 		ResponseWriter: w,
-		headerModifier: handleResponseHeader,
+		headerModifier: applyRulesToResponseHeader,
 	}, r)
 
 }
@@ -261,10 +288,10 @@ type RefTokenSetter func(header http.Header, refToken string)
 type RefTokenGetter func(r *http.Request) string
 
 // NewCookieRefTokenSetter creates a RefTokenSetter storing token in cookie.
-func NewCookieRefTokenSetter(baseCookie *http.Cookie) RefTokenSetter {
+func NewCookieRefTokenSetter(baseCookie *http.Cookie) (RefTokenSetter, error) {
 
 	if err := checkCookieName(baseCookie.Name); err != nil {
-		panic(err)
+		return nil, err
 	}
 	return func(header http.Header, refToken string) {
 		cookie := *baseCookie
@@ -273,29 +300,29 @@ func NewCookieRefTokenSetter(baseCookie *http.Cookie) RefTokenSetter {
 		if v != "" {
 			header.Add("Set-Cookie", v)
 		}
-	}
+	}, nil
 
 }
 
 // NewGenericRefTokenSetter creates a RefTokenSetter storing token in header directly.
-func NewGenericRefTokenSetter(headerName string) RefTokenSetter {
+func NewGenericRefTokenSetter(headerName string) (RefTokenSetter, error) {
 
 	headerName, err := checkHeaderName(headerName)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return func(header http.Header, refToken string) {
 		// HeaderName is already canonical.
 		header[headerName] = []string{refToken}
-	}
+	}, nil
 
 }
 
 // NewCookieRefTokenGetter creates a RefTokenGetter retriving token from cookie.
-func NewCookieRefTokenGetter(cookieName string) RefTokenGetter {
+func NewCookieRefTokenGetter(cookieName string) (RefTokenGetter, error) {
 
 	if err := checkCookieName(cookieName); err != nil {
-		panic(err)
+		return nil, err
 	}
 	return func(r *http.Request) string {
 		cookie, err := r.Cookie(cookieName)
@@ -303,16 +330,16 @@ func NewCookieRefTokenGetter(cookieName string) RefTokenGetter {
 			return ""
 		}
 		return cookie.Value
-	}
+	}, nil
 
 }
 
 // NewGenericRefTokenGetter creates a RefTokenGetter retriving token from header.
-func NewGenericRefTokenGetter(headerName string) RefTokenGetter {
+func NewGenericRefTokenGetter(headerName string) (RefTokenGetter, error) {
 
 	headerName, err := checkHeaderName(headerName)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return func(r *http.Request) string {
 		// headerName is already canonical.
@@ -321,7 +348,7 @@ func NewGenericRefTokenGetter(headerName string) RefTokenGetter {
 			return ""
 		}
 		return v[0]
-	}
+	}, nil
 
 }
 
