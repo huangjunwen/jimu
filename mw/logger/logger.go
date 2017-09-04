@@ -38,7 +38,8 @@ func New(output io.Writer) func(http.Handler) http.Handler {
 			Str("url", r.URL.String()).
 			Int("status", status).
 			Int("sz", sz).
-			Str("dur", duration.String()).Msg("HTTP")
+			Str("src", "http").
+			Str("dur", duration.String()).Msg("")
 
 	})
 	mw3 := hlog.RequestIDHandler("reqid", "")

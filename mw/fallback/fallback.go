@@ -135,11 +135,11 @@ func New(fallbackHandler http.Handler) func(http.Handler) http.Handler {
 
 				// Log if has Error.
 				if fi.Error != nil {
-					ev := logger.Logger(r).Error().Err(fi.Error)
+					ev := logger.Logger(r).Error().Err(fi.Error).Str("src", "fallback")
 					if hasPanic {
 						ev.Bytes("panic", debug.Stack())
 					}
-					ev.Msg("Error")
+					ev.Msg("")
 				}
 
 				// If w2.Status() == 0, then w2.WriteHeader is not called. Activate
