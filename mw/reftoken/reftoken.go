@@ -51,6 +51,13 @@ func New(store KVStore, next http.Handler) *Manager {
 	}
 }
 
+// SetTTL set default ttl for kv.
+func (m *Manager) SetTTL(ttl int) {
+	if ttl > 0 {
+		m.ttl = ttl
+	}
+}
+
 func (m *Manager) generateRefToken(_ string) string {
 
 	buf := make([]byte, 20)
