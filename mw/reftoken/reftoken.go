@@ -34,21 +34,22 @@ type Manager struct {
 	// Translate rules.
 	real2RefRules []real2RefRule
 	ref2RealRules []ref2RealRule
-
-	// Wrapped handler.
-	next http.Handler
 }
 
 // NewManager creates a new reftoken manager.
-func NewManager(store KVStore, next http.Handler) *Manager {
+func NewManager(storeURL string) (*Manager, error) {
+
+	store, err := NewKVStore(storeURL)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Manager{
 		store:            store,
 		ttl:              DefaultTTL,
 		ttlHeaderName:    DefaultTTLHeaderName,
 		logoutHeaderName: DefaultLogoutHeaderName,
-		next:             next,
-	}
+	}, nil
 }
 
 // SetTokenTTL set default ttl for tokens.
@@ -69,8 +70,7 @@ func (m *Manager) generateRefToken(_ string) string {
 
 }
 
-// ServeHTTP implement http.Handler interface.
-func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
 
 	lg := logger.Logger(r)
 
@@ -214,11 +214,18 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	m.next.ServeHTTP(&responseWriterProxy{
+	next.ServeHTTP(&responseWriterProxy{
 		ResponseWriter: w,
 		headerModifier: applyRulesToResponseHeader,
 	}, r)
 
+}
+
+// Wrap is the middleware function.
+func (m *Manager) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.serve(w, r, next)
+	})
 }
 
 // AddRef2RealRule add a translate rule to translate ref token to real token.
@@ -248,6 +255,31 @@ func (m *Manager) AddReal2RefRule(realTokenHeaderName string, refTokenSetter Ref
 		refTokenSetter:      refTokenSetter,
 	})
 	return
+
+}
+
+// AddDefaultRules add some default rules for convenient use:
+//    (external) "Reftoken-Ref-Token"        -> (internal) "Reftoken-Real-Token"
+//    (external) cookie "reftoken"           -> (internal) "Reftoken-Real-Token"
+//    (internal) "Reftoken-Set-Token"        -> (external) "Reftoken-Ref-Token"
+//    (internal) "Reftoken-Set-Cookie-Token" -> (external) cookie "reftoken"
+func (m *Manager) AddDefaultRules() {
+
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	must(m.AddReal2RefRule("Reftoken-Set-Token", MustGenericSetter("Reftoken-Ref-Token")))
+	must(m.AddReal2RefRule("Reftoken-Set-Cookie-Token", MustCookieSetter(
+		&http.Cookie{
+			Name: "reftoken",
+			Path: "/",
+		},
+	)))
+	must(m.AddRef2RealRule(MustGenericGetter("Reftoken-Ref-Token"), "Reftoken-Real-Token"))
+	must(m.AddRef2RealRule(MustCookieGetter("reftoken"), "Reftoken-Real-Token"))
 
 }
 
@@ -287,8 +319,8 @@ type RefTokenSetter func(header http.Header, refToken string)
 // RefTokenGetter gets refToken from request.
 type RefTokenGetter func(r *http.Request) string
 
-// NewCookieRefTokenSetter creates a RefTokenSetter storing token in cookie.
-func NewCookieRefTokenSetter(baseCookie *http.Cookie) (RefTokenSetter, error) {
+// NewCookieSetter creates a RefTokenSetter storing ref token in cookie.
+func NewCookieSetter(baseCookie *http.Cookie) (RefTokenSetter, error) {
 
 	if err := checkCookieName(baseCookie.Name); err != nil {
 		return nil, err
@@ -304,8 +336,17 @@ func NewCookieRefTokenSetter(baseCookie *http.Cookie) (RefTokenSetter, error) {
 
 }
 
-// NewGenericRefTokenSetter creates a RefTokenSetter storing token in header directly.
-func NewGenericRefTokenSetter(headerName string) (RefTokenSetter, error) {
+// MustCookieSetter is the must version of NewCookieSetter.
+func MustCookieSetter(baseCookie *http.Cookie) RefTokenSetter {
+	ret, err := NewCookieSetter(baseCookie)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
+
+// NewGenericSetter creates a RefTokenSetter storing ref token in header directly.
+func NewGenericSetter(headerName string) (RefTokenSetter, error) {
 
 	headerName, err := checkHeaderName(headerName)
 	if err != nil {
@@ -318,8 +359,17 @@ func NewGenericRefTokenSetter(headerName string) (RefTokenSetter, error) {
 
 }
 
-// NewCookieRefTokenGetter creates a RefTokenGetter retriving token from cookie.
-func NewCookieRefTokenGetter(cookieName string) (RefTokenGetter, error) {
+// MustGenericSetter is the must version of NewGenericSetter.
+func MustGenericSetter(headerName string) RefTokenSetter {
+	ret, err := NewGenericSetter(headerName)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
+
+// NewCookieGetter creates a RefTokenGetter retriving ref token from cookie.
+func NewCookieGetter(cookieName string) (RefTokenGetter, error) {
 
 	if err := checkCookieName(cookieName); err != nil {
 		return nil, err
@@ -334,8 +384,17 @@ func NewCookieRefTokenGetter(cookieName string) (RefTokenGetter, error) {
 
 }
 
-// NewGenericRefTokenGetter creates a RefTokenGetter retriving token from header.
-func NewGenericRefTokenGetter(headerName string) (RefTokenGetter, error) {
+// MustCookieGetter is the must version of NewCookieGetter.
+func MustCookieGetter(cookieName string) RefTokenGetter {
+	ret, err := NewCookieGetter(cookieName)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
+
+// NewGenericGetter creates a RefTokenGetter retriving ref token from header.
+func NewGenericGetter(headerName string) (RefTokenGetter, error) {
 
 	headerName, err := checkHeaderName(headerName)
 	if err != nil {
@@ -350,6 +409,15 @@ func NewGenericRefTokenGetter(headerName string) (RefTokenGetter, error) {
 		return v[0]
 	}, nil
 
+}
+
+// MustGenericGetter is the must version of NewGenericGetter.
+func MustGenericGetter(headerName string) RefTokenGetter {
+	ret, err := NewGenericGetter(headerName)
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }
 
 var (

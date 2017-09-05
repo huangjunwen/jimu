@@ -28,7 +28,12 @@ func RegistKVStoreCreator(name string, creator func(*url.URL) (KVStore, error)) 
 }
 
 // NewKVStore creates a new kv store from url.
-func NewKVStore(u *url.URL) (KVStore, error) {
+func NewKVStore(storeURL string) (KVStore, error) {
+
+	u, err := url.Parse(storeURL)
+	if err != nil {
+		return nil, err
+	}
 
 	creator, ok := kvStoreCreators[u.Scheme]
 	if !ok {
