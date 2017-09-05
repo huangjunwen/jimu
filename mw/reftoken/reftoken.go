@@ -261,8 +261,11 @@ func (m *Manager) AddReal2RefRule(realTokenHeaderName string, refTokenSetter Ref
 // AddDefaultRules add some default rules for convenient use:
 //    (external) "Reftoken-Ref-Token"        -> (internal) "Reftoken-Real-Token"
 //    (external) cookie "reftoken"           -> (internal) "Reftoken-Real-Token"
-//    (internal) "Reftoken-Set-Token"        -> (external) "Reftoken-Ref-Token"
-//    (internal) "Reftoken-Set-Cookie-Token" -> (external) cookie "reftoken"
+//    (internal) "Reftoken-Set"              -> (external) "Reftoken-Ref-Token"
+//    (internal) "Reftoken-Set-Cookie"       -> (external) cookie "reftoken"
+// Thus no matter whether the reftoken is come from web page request (in cookie) or
+// api request (in header), handlers can use "Reftoken-Real-Token" to get authentication
+// information.
 func (m *Manager) AddDefaultRules() {
 
 	must := func(err error) {
