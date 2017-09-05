@@ -107,11 +107,13 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 		}
 
 		// Translate ref tokens to real tokens.
+		lg.Debug().Strs("refTokens", refTokens).Str("src", "reftoken").Msg("")
 		realTokens, err := m.store.Get(refTokens)
 		if err != nil {
 			lg.Error().Err(fmt.Errorf("KVStore.Get: %s", err)).Str("src", "reftoken").Msg("")
 			return nil
 		}
+		lg.Debug().Strs("realTokens", realTokens).Str("src", "reftoken").Msg("")
 
 		// Should never happen.
 		if len(realTokens) != len(realTokenHeaderNames) {
@@ -195,21 +197,18 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 
 		}
 
-		// If any.
-		if len(refTokens) != 0 {
+		if len(refTokens) == 0 {
+			return
+		}
 
-			if err := m.store.Set(kvs, ttl); err != nil {
+		lg.Debug().Interface("kvs", kvs).Int("ttl", ttl).Str("src", "reftoken").Msg("")
+		if err := m.store.Set(kvs, ttl); err != nil {
+			lg.Error().Err(fmt.Errorf("KVStore.Set: %s", err)).Str("src", "reftoken").Msg("")
+			return
+		}
 
-				lg.Error().Err(fmt.Errorf("KVStore.Set: %s", err)).Str("src", "reftoken").Msg("")
-
-			} else {
-
-				for i, refToken := range refTokens {
-					refTokenSetters[i](h, refToken)
-				}
-
-			}
-
+		for i, refToken := range refTokens {
+			refTokenSetters[i](h, refToken)
 		}
 
 	}
@@ -300,6 +299,12 @@ func (rw *responseWriterProxy) WriteHeader(status int) {
 	rw.headerModifier(rw.ResponseWriter.Header())
 	rw.ResponseWriter.WriteHeader(status)
 
+}
+
+// Write implement http.ResponseWriter interface.
+func (rw *responseWriterProxy) Write(content []byte) (int, error) {
+	rw.WriteHeader(http.StatusOK)
+	return rw.ResponseWriter.Write(content)
 }
 
 type real2RefRule struct {
