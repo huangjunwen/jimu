@@ -107,13 +107,13 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 		}
 
 		// Translate ref tokens to real tokens.
-		lg.Debug().Strs("refTokens", refTokens).Str("src", "reftoken").Msg("")
+		lg.Debug().Strs("get:refTokens", refTokens).Str("src", "reftoken").Msg("")
 		realTokens, err := m.store.Get(refTokens)
 		if err != nil {
 			lg.Error().Err(fmt.Errorf("KVStore.Get: %s", err)).Str("src", "reftoken").Msg("")
 			return nil
 		}
-		lg.Debug().Strs("realTokens", realTokens).Str("src", "reftoken").Msg("")
+		lg.Debug().Strs("got:realTokens", realTokens).Str("src", "reftoken").Msg("")
 
 		// Should never happen.
 		if len(realTokens) != len(realTokenHeaderNames) {
@@ -143,6 +143,7 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 			return
 		}
 		delete(h, m.logoutHeaderName)
+		lg.Debug().Strs("del:refTokens", existRefTokens).Str("src", "reftoken").Msg("")
 		if err := m.store.Del(existRefTokens); err != nil {
 			lg.Error().Err(fmt.Errorf("KVStore.Del: %s", err)).Str("src", "reftoken").Msg("")
 		}
@@ -201,7 +202,7 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 			return
 		}
 
-		lg.Debug().Interface("kvs", kvs).Int("ttl", ttl).Str("src", "reftoken").Msg("")
+		lg.Debug().Interface("set:kvs", kvs).Int("ttl", ttl).Str("src", "reftoken").Msg("")
 		if err := m.store.Set(kvs, ttl); err != nil {
 			lg.Error().Err(fmt.Errorf("KVStore.Set: %s", err)).Str("src", "reftoken").Msg("")
 			return
@@ -270,11 +271,12 @@ func (m *Manager) AddDefaultRules() {
 		}
 	}
 
-	must(m.AddReal2RefRule("Reftoken-Set-Token", MustGenericSetter("Reftoken-Ref-Token")))
-	must(m.AddReal2RefRule("Reftoken-Set-Cookie-Token", MustCookieSetter(
+	must(m.AddReal2RefRule("Reftoken-Set", MustGenericSetter("Reftoken-Ref-Token")))
+	must(m.AddReal2RefRule("Reftoken-Set-Cookie", MustCookieSetter(
 		&http.Cookie{
-			Name: "reftoken",
-			Path: "/",
+			Name:     "reftoken",
+			Path:     "/",
+			HttpOnly: true,
 		},
 	)))
 	must(m.AddRef2RealRule(MustGenericGetter("Reftoken-Ref-Token"), "Reftoken-Real-Token"))
