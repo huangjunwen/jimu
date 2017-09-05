@@ -1,18 +1,45 @@
 package logger
 
 import (
+	"fmt"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 // Logger return the zerologger (or a nop logger) for current request.
 func Logger(r *http.Request) zerolog.Logger {
 	return zerolog.Ctx(r.Context())
+}
+
+// SetGlobalLevel set loggers' level: debug/info/warn/error/fatal/panic/disabled.
+func SetGlobalLevel(level string) {
+	level = strings.ToLower(level)
+	var lvl zerolog.Level
+	switch level {
+	case "debug":
+		lvl = zerolog.DebugLevel
+	case "info":
+		lvl = zerolog.InfoLevel
+	case "warn":
+		lvl = zerolog.WarnLevel
+	case "error":
+		lvl = zerolog.ErrorLevel
+	case "fatal":
+		lvl = zerolog.FatalLevel
+	case "panic":
+		lvl = zerolog.PanicLevel
+	case "disabled":
+		lvl = zerolog.Disabled
+	default:
+		panic(fmt.Errorf("Unknown log level %+q", level))
+	}
+	zerolog.SetGlobalLevel(lvl)
 }
 
 // New creates a middleware that adds zerolog's json logger to context.
@@ -57,4 +84,8 @@ func NewForConsole(output io.Writer, noColor bool) func(http.Handler) http.Handl
 		output = os.Stderr
 	}
 	return New(zerolog.ConsoleWriter{Out: output, NoColor: noColor})
+}
+
+func init() {
+	SetGlobalLevel("info")
 }
