@@ -3,7 +3,7 @@ package fallback
 import (
 	"context"
 	"fmt"
-	"github.com/huangjunwen/MW/mw/logger"
+	"github.com/rs/zerolog"
 	"github.com/zenazn/goji/web/mutil"
 	"net/http"
 	"runtime/debug"
@@ -86,79 +86,114 @@ func Info(r *http.Request) *FallbackInfo {
 	return val.(*FallbackInfo)
 }
 
-// New creates a middleware that adds a fallback handler to context which will be invoked
-// when panic or no other response written. User handler can also add extra information to
-// configure how to generate fallback response.
-//
-// Depends on: (optinal) mw/logger for error logging.
-func New(fallbackHandler http.Handler) func(http.Handler) http.Handler {
+// Option is FallbackManager's option.
+type Option func(*FallbackManager) error
 
-	if fallbackHandler == nil {
-		fallbackHandler = defaultFallbackHandler
+// Handler set the fallback handler.
+func Handler(h http.Handler) Option {
+	if h == nil {
+		h = defaultFallbackHandler
 	}
-
-	return func(next http.Handler) http.Handler {
-
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-			var (
-				w2 mutil.WriterProxy
-				r2 *http.Request
-				fi = &FallbackInfo{}
-				ok bool
-			)
-
-			// Wrap ResponseWriter to check status.
-			if w2, ok = w.(mutil.WriterProxy); !ok {
-				w2 = mutil.WrapWriter(w)
-			}
-
-			// Install fallback context value.
-			r2 = r.WithContext(context.WithValue(r.Context(), fallbackInfoCtxKey, fi))
-
-			defer func() {
-				hasPanic := false
-				rcv := recover()
-
-				// If panic.
-				if rcv != nil {
-					hasPanic = true
-					err, ok := rcv.(error)
-					if !ok {
-						err = fmt.Errorf("%v", rcv)
-					}
-					fi.Clear()
-					fi.WithError(err).
-						WithStatus(http.StatusInternalServerError).
-						WithMsg(http.StatusText(http.StatusInternalServerError))
-				}
-
-				// Log if has Error.
-				if fi.Error != nil {
-					ev := logger.Logger(r).Error().Err(fi.Error).Str("src", "fallback")
-					if hasPanic {
-						ev.Bytes("panic", debug.Stack())
-					}
-					ev.Msg("")
-				}
-
-				// If w2.Status() == 0, then w2.WriteHeader is not called. Activate
-				// fallback handler.
-				if w2.Status() == 0 {
-					fallbackHandler.ServeHTTP(w2, r2)
-				}
-
-			}()
-
-			next.ServeHTTP(w2, r2)
-
-		})
-
+	return func(m *FallbackManager) error {
+		m.fallbackHandler = h
+		return nil
 	}
-
 }
 
-// NewFunc is similar to New but accept handler function: func(http.ResponseWriter, *http.Request).
-func NewFunc(fallbackHandlerFunc http.HandlerFunc) func(http.Handler) http.Handler {
-	return New(fallbackHandlerFunc)
+// HandlerFunc set the fallback handler.
+func HandlerFunc(f http.HandlerFunc) Option {
+	var h http.Handler = f
+	if h == nil {
+		h = defaultFallbackHandler
+	}
+	return func(m *FallbackManager) error {
+		m.fallbackHandler = h
+		return nil
+	}
+}
+
+// FallbackManager adds a fallback handler to context which will be invoked
+// when panic or no other response written. User handler can also add extra information to
+// configure how to generate fallback response.
+type FallbackManager struct {
+	fallbackHandler http.Handler
+}
+
+// NewFallbackManager create FallbackManager with options.
+func NewFallbackManager(options ...Option) (*FallbackManager, error) {
+
+	ret := &FallbackManager{}
+	ops := []Option{
+		Handler(nil),
+	}
+	ops = append(ops, options...)
+	for _, op := range ops {
+		if err := op(ret); err != nil {
+			return nil, err
+		}
+	}
+	return ret, nil
+}
+
+// Wrap is the middleware.
+func (m *FallbackManager) Wrap(next http.Handler) http.Handler {
+
+	fallbackHandler := m.fallbackHandler
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		var (
+			w2 mutil.WriterProxy
+			r2 *http.Request
+			fi = &FallbackInfo{}
+			ok bool
+			lg = zerolog.Ctx(r.Context())
+		)
+
+		// Wrap ResponseWriter to check status.
+		if w2, ok = w.(mutil.WriterProxy); !ok {
+			w2 = mutil.WrapWriter(w)
+		}
+
+		// Install fallback context value.
+		r2 = r.WithContext(context.WithValue(r.Context(), fallbackInfoCtxKey, fi))
+
+		defer func() {
+			hasPanic := false
+			rcv := recover()
+
+			// If panic.
+			if rcv != nil {
+				hasPanic = true
+				err, ok := rcv.(error)
+				if !ok {
+					err = fmt.Errorf("%v", rcv)
+				}
+				fi.Clear()
+				fi.WithError(err).
+					WithStatus(http.StatusInternalServerError).
+					WithMsg(http.StatusText(http.StatusInternalServerError))
+			}
+
+			// Log if has Error.
+			if fi.Error != nil {
+				ev := lg.Error().Err(fi.Error).Str("src", "fallback")
+				if hasPanic {
+					ev.Bytes("panic", debug.Stack())
+				}
+				ev.Msg("")
+			}
+
+			// If w2.Status() == 0, then w2.WriteHeader is not called. Activate
+			// fallback handler.
+			if w2.Status() == 0 {
+				fallbackHandler.ServeHTTP(w2, r2)
+			}
+
+		}()
+
+		next.ServeHTTP(w2, r2)
+
+	})
+
 }

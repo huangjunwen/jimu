@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"github.com/huangjunwen/MW/mw/logger"
+	"github.com/rs/zerolog"
 	"net/http"
 	"net/textproto"
 	"regexp"
@@ -18,9 +18,130 @@ const (
 	DefaultLogoutHeaderName = "Reftoken-Logout"
 )
 
-// Manager stores information to translate between external ref tokens
+// Option is the option to to create RefTokenManager.
+type Option func(*RefTokenManager) error
+
+// Store set the kv store to used in RefTokenManager.
+func Store(storeURL string) Option {
+	return func(m *RefTokenManager) error {
+		store, err := NewKVStore(storeURL)
+		if err != nil {
+			return err
+		}
+		m.store = store
+		return nil
+	}
+}
+
+// TTL set the default ttl (in seconds) for kv in store.
+func TTL(ttl int) Option {
+	return func(m *RefTokenManager) error {
+		if ttl <= 0 {
+			return fmt.Errorf("TTL: should > 0 but got %d", ttl)
+		}
+		m.ttl = ttl
+		return nil
+	}
+}
+
+// TTLHeaderName set the response header name to specify ttl for kv.
+func TTLHeaderName(headerName string) Option {
+	return func(m *RefTokenManager) error {
+		headerName, err := checkHeaderName(headerName)
+		if err != nil {
+			return err
+		}
+		m.ttlHeaderName = headerName
+		return nil
+	}
+}
+
+// LogoutHeaderName set the response header name to remove kv.
+func LogoutHeaderName(headerName string) Option {
+	return func(m *RefTokenManager) error {
+		headerName, err := checkHeaderName(headerName)
+		if err != nil {
+			return err
+		}
+		m.logoutHeaderName = headerName
+		return nil
+	}
+}
+
+// Real2RefRule add a rule specifying how to map a real token (internal) to a
+// ref token (external).
+func Real2RefRule(realTokenHeaderName string, refTokenSetter RefTokenSetter) Option {
+	return func(m *RefTokenManager) error {
+		realTokenHeaderName, err := checkHeaderName(realTokenHeaderName)
+		if err != nil {
+			return err
+		}
+		if refTokenSetter == nil {
+			return fmt.Errorf("RefTokenSetter is nil")
+		}
+		m.real2RefRules = append(m.real2RefRules, real2RefRule{
+			realTokenHeaderName: realTokenHeaderName,
+			refTokenSetter:      refTokenSetter,
+		})
+		return nil
+	}
+}
+
+// Ref2RealRule add a rule specifying how to map a ref token (external) to a
+// real token (internal).
+func Ref2RealRule(refTokenGetter RefTokenGetter, realTokenHeaderName string) Option {
+	return func(m *RefTokenManager) error {
+		if refTokenGetter == nil {
+			return fmt.Errorf("refTokenGetter is nil")
+		}
+		realTokenHeaderName, err := checkHeaderName(realTokenHeaderName)
+		if err != nil {
+			return err
+		}
+		m.ref2RealRules = append(m.ref2RealRules, ref2RealRule{
+			realTokenHeaderName: realTokenHeaderName,
+			refTokenGetter:      refTokenGetter,
+		})
+		return nil
+	}
+}
+
+// DefaultRules add some default rules for convenient use:
+//    (external) "Reftoken-Ref-Token"        -> (internal) "Reftoken-Real-Token"
+//    (external) cookie "reftoken"           -> (internal) "Reftoken-Real-Token"
+//    (internal) "Reftoken-Set"              -> (external) "Reftoken-Ref-Token"
+//    (internal) "Reftoken-Set-Cookie"       -> (external) cookie "reftoken"
+// Thus no matter whether the reftoken is come from web page request (in cookie) or
+// api request (in header), handlers can use "Reftoken-Real-Token" to get authentication
+// information.
+func DefaultRules() Option {
+	return func(m *RefTokenManager) error {
+
+		ops := []Option{
+			Real2RefRule("Reftoken-Set", MustGenericSetter("Reftoken-Ref-Token")),
+			Real2RefRule("Reftoken-Set-Cookie", MustCookieSetter(
+				&http.Cookie{
+					Name:     "reftoken",
+					Path:     "/",
+					HttpOnly: true,
+				},
+			)),
+			Ref2RealRule(MustGenericGetter("Reftoken-Ref-Token"), "Reftoken-Real-Token"),
+			Ref2RealRule(MustCookieGetter("reftoken"), "Reftoken-Real-Token"),
+		}
+		for _, op := range ops {
+			if err := op(m); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	}
+}
+
+// RefTokenManager stores information to translate between external ref tokens
 // and internal real tokens. See: https://www.slideshare.net/opencredo/authentication-in-microservice-systems-david-borsos
-type Manager struct {
+type RefTokenManager struct {
 	// stores refToken -> realToken mapping with ttl.
 	store KVStore
 
@@ -36,43 +157,45 @@ type Manager struct {
 	ref2RealRules []ref2RealRule
 }
 
-// NewManager creates a new reftoken manager.
-func NewManager(storeURL string) (*Manager, error) {
+// NewRefTokenManager create RefTokenManager.
+func NewRefTokenManager(options ...Option) (*RefTokenManager, error) {
 
-	store, err := NewKVStore(storeURL)
-	if err != nil {
-		return nil, err
+	ret := &RefTokenManager{}
+	ops := []Option{
+		TTL(DefaultTTL),
+		TTLHeaderName(DefaultTTLHeaderName),
+		LogoutHeaderName(DefaultLogoutHeaderName),
+	}
+	ops = append(ops, options...)
+	for _, op := range ops {
+		if err := op(ret); err != nil {
+			return nil, err
+		}
 	}
 
-	return &Manager{
-		store:            store,
-		ttl:              DefaultTTL,
-		ttlHeaderName:    DefaultTTLHeaderName,
-		logoutHeaderName: DefaultLogoutHeaderName,
-	}, nil
-}
-
-// SetTokenTTL set default ttl for tokens.
-func (m *Manager) SetTokenTTL(ttl int) {
-	if ttl > 0 {
-		m.ttl = ttl
+	if ret.store == nil {
+		return nil, fmt.Errorf("No Store in RefTokenManager")
 	}
-}
-
-func (m *Manager) generateRefToken(_ string) string {
-
-	buf := make([]byte, 20)
-	_, err := rand.Read(buf)
-	if err != nil {
-		panic(err)
+	if len(ret.ref2RealRules) == 0 {
+		return nil, fmt.Errorf("No Ref2RealRule in RefTokenManager")
 	}
-	return base64.StdEncoding.EncodeToString(buf)
+	if len(ret.real2RefRules) == 0 {
+		return nil, fmt.Errorf("No Real2RefRule in RefTokenManager")
+	}
+	return ret, nil
 
 }
 
-func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
+// Wrap is the middleware.
+func (m *RefTokenManager) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.serve(w, r, next)
+	})
+}
 
-	lg := logger.Logger(r)
+func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
+
+	lg := zerolog.Ctx(r.Context())
 
 	// Apply ref 2 real token rules. Return ref tokens.
 	applyRulesToRequest := func() []string {
@@ -221,69 +344,14 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, next http.Handle
 
 }
 
-// Wrap is the middleware function.
-func (m *Manager) Wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.serve(w, r, next)
-	})
-}
+func (m *RefTokenManager) generateRefToken(_ string) string {
 
-// AddRef2RealRule add a translate rule to translate ref token to real token.
-func (m *Manager) AddRef2RealRule(refTokenGetter RefTokenGetter, realTokenHeaderName string) (err error) {
-
-	realTokenHeaderName, err = checkHeaderName(realTokenHeaderName)
+	buf := make([]byte, 20)
+	_, err := rand.Read(buf)
 	if err != nil {
-		return
+		panic(err)
 	}
-	m.ref2RealRules = append(m.ref2RealRules, ref2RealRule{
-		realTokenHeaderName: realTokenHeaderName,
-		refTokenGetter:      refTokenGetter,
-	})
-	return
-
-}
-
-// AddReal2RefRule add a translate rule to translate real token to ref token.
-func (m *Manager) AddReal2RefRule(realTokenHeaderName string, refTokenSetter RefTokenSetter) (err error) {
-
-	realTokenHeaderName, err = checkHeaderName(realTokenHeaderName)
-	if err != nil {
-		return
-	}
-	m.real2RefRules = append(m.real2RefRules, real2RefRule{
-		realTokenHeaderName: realTokenHeaderName,
-		refTokenSetter:      refTokenSetter,
-	})
-	return
-
-}
-
-// AddDefaultRules add some default rules for convenient use:
-//    (external) "Reftoken-Ref-Token"        -> (internal) "Reftoken-Real-Token"
-//    (external) cookie "reftoken"           -> (internal) "Reftoken-Real-Token"
-//    (internal) "Reftoken-Set"              -> (external) "Reftoken-Ref-Token"
-//    (internal) "Reftoken-Set-Cookie"       -> (external) cookie "reftoken"
-// Thus no matter whether the reftoken is come from web page request (in cookie) or
-// api request (in header), handlers can use "Reftoken-Real-Token" to get authentication
-// information.
-func (m *Manager) AddDefaultRules() {
-
-	must := func(err error) {
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	must(m.AddReal2RefRule("Reftoken-Set", MustGenericSetter("Reftoken-Ref-Token")))
-	must(m.AddReal2RefRule("Reftoken-Set-Cookie", MustCookieSetter(
-		&http.Cookie{
-			Name:     "reftoken",
-			Path:     "/",
-			HttpOnly: true,
-		},
-	)))
-	must(m.AddRef2RealRule(MustGenericGetter("Reftoken-Ref-Token"), "Reftoken-Real-Token"))
-	must(m.AddRef2RealRule(MustCookieGetter("reftoken"), "Reftoken-Real-Token"))
+	return base64.StdEncoding.EncodeToString(buf)
 
 }
 
