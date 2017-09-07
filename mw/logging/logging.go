@@ -52,8 +52,8 @@ type LoggingManager struct {
 	logger          zerolog.Logger
 }
 
-// NewLoggingManager create LoggingManager with options.
-func NewLoggingManager(options ...Option) (*LoggingManager, error) {
+// New create LoggingManager with options.
+func New(options ...Option) (*LoggingManager, error) {
 
 	ret := &LoggingManager{}
 	ops := []Option{

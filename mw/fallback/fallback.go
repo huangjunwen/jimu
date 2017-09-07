@@ -119,8 +119,8 @@ type FallbackManager struct {
 	fallbackHandler http.Handler
 }
 
-// NewFallbackManager create FallbackManager with options.
-func NewFallbackManager(options ...Option) (*FallbackManager, error) {
+// New create FallbackManager with options.
+func New(options ...Option) (*FallbackManager, error) {
 
 	ret := &FallbackManager{}
 	ops := []Option{

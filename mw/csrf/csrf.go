@@ -75,8 +75,8 @@ type CsrfManager struct {
 	cookie       http.Cookie
 }
 
-// NewCsrfManager create CsrfManager.
-func NewCsrfManager(options ...Option) (*CsrfManager, error) {
+// New create CsrfManager.
+func New(options ...Option) (*CsrfManager, error) {
 
 	ret := &CsrfManager{
 		cookie: http.Cookie{

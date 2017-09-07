@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	DefaultTTL = 3600 * 3
+	DefaultTokenLength = 32
+	DefaultTTL         = 3600 * 3
 	// These are some default internal header names.
 	DefaultTTLHeaderName    = "Reftoken-TTL"
 	DefaultLogoutHeaderName = "Reftoken-Logout"
@@ -29,6 +30,17 @@ func Store(storeURL string) Option {
 			return err
 		}
 		m.store = store
+		return nil
+	}
+}
+
+// TokenLength set the ref token's length (before base64 encode).
+func TokenLength(l int) Option {
+	return func(m *RefTokenManager) error {
+		if l < 20 {
+			return fmt.Errorf("TokenLength: %d is too short", l)
+		}
+		m.tokenLength = l
 		return nil
 	}
 }
@@ -148,6 +160,9 @@ type RefTokenManager struct {
 	// Default ttl in seconds when storing data.
 	ttl int
 
+	// Length of ref token (in bytes before base64 encode)
+	tokenLength int
+
 	// Special header names.
 	ttlHeaderName    string
 	logoutHeaderName string
@@ -157,11 +172,12 @@ type RefTokenManager struct {
 	ref2RealRules []ref2RealRule
 }
 
-// NewRefTokenManager create RefTokenManager.
-func NewRefTokenManager(options ...Option) (*RefTokenManager, error) {
+// New create RefTokenManager.
+func New(options ...Option) (*RefTokenManager, error) {
 
 	ret := &RefTokenManager{}
 	ops := []Option{
+		TokenLength(DefaultTokenLength),
 		TTL(DefaultTTL),
 		TTLHeaderName(DefaultTTLHeaderName),
 		LogoutHeaderName(DefaultLogoutHeaderName),
@@ -346,7 +362,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 
 func (m *RefTokenManager) generateRefToken(_ string) string {
 
-	buf := make([]byte, 20)
+	buf := make([]byte, m.tokenLength)
 	_, err := rand.Read(buf)
 	if err != nil {
 		panic(err)
