@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	"io"
@@ -10,95 +11,80 @@ import (
 	"time"
 )
 
-// Option is LoggingManager's option.
-type Option func(*LoggingManager) error
+type ZeroLogger *zerolog.Logger
 
-// Output set logging's output.
-func Output(w io.Writer) Option {
-	if w == nil {
-		w = os.Stderr
+func asString(v interface{}) string {
+	s, ok := v.(string)
+	if ok {
+		return s
 	}
-	return func(m *LoggingManager) error {
-		m.output = w
-		return nil
-	}
+	return fmt.Sprint(v)
 }
 
-// ConsoleOutput set logging's using zerolog.ConsoleWriter.
-func ConsoleOutput(w io.Writer, noColor bool) Option {
-	if w == nil {
-		w = os.Stderr
-	}
-	return func(m *LoggingManager) error {
-		m.output = zerolog.ConsoleWriter{Out: w, NoColor: noColor}
-		return nil
-	}
-}
+// Log implement mw.Logger interface.
+func (l ZeroLogger) Log(keyvals ...interface{}) error {
 
-// ExtraField add an extra field to log for a http request.
-func ExtraField(field string, fieldExtractor func(*http.Request) string) Option {
-	return func(m *LoggingManager) error {
-		m.fields = append(m.fields, field)
-		m.fieldExtractors = append(m.fieldExtractors, fieldExtractor)
-		return nil
-	}
-}
+	lg := (*zerolog.Logger)(l)
 
-// LoggingManager adds zerolog's json logger to context and log http requests.
-type LoggingManager struct {
-	output          io.Writer
-	fields          []string
-	fieldExtractors []func(*http.Request) string
-	logger          zerolog.Logger
-}
-
-// New create LoggingManager with options.
-func New(options ...Option) (*LoggingManager, error) {
-
-	ret := &LoggingManager{}
-	ops := []Option{
-		Output(nil),
-	}
-	ops = append(ops, options...)
-	for _, op := range ops {
-		if err := op(ret); err != nil {
-			return nil, err
-		}
+	if len(keyvals)&1 == 1 {
+		keyvals = append(keyvals, "(!!missing)")
 	}
 
-	ret.logger = zerolog.New(ret.output).With().Timestamp().Logger()
-	return ret, nil
+	var (
+		ev  *zerolog.Event
+		msg string
+	)
 
-}
-
-// Wrap is the middleware.
-func (m *LoggingManager) Wrap(next http.Handler) http.Handler {
-
-	mw1 := hlog.NewHandler(m.logger)
-	mw2 := hlog.AccessHandler(func(r *http.Request, status int, sz int, duration time.Duration) {
-		// Do this ourself to reduce one level of middleware.
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = "?.?.?.?"
-		}
-		ev := m.logger.Info().
-			Str("ip", ip).
-			Str("method", r.Method).
-			Str("url", r.URL.String()).
-			Int("status", status).
-			Int("sz", sz).
-			Str("src", "http").
-			Str("dur", duration.String())
-		for i, field := range m.fields {
-			v := m.fieldExtractors[i](r)
-			if v != "" {
-				ev = ev.Str(field, v)
+	for i := 0; i < len(keyvals); i += 2 {
+		key := asString(keyvals[i])
+		val := keyvals[i+1]
+		switch key {
+		// Expect the first field is level. Otherwise default level to info.
+		case zerolog.LevelFieldName:
+			if ev != nil {
+				continue
+			}
+			switch asString(val) {
+			case "debug":
+				ev = lg.Debug()
+			case "info":
+				ev = lg.Info()
+			case "warn":
+				ev = lg.Warn()
+			case "error":
+				ev = lg.Error()
+			case "fatal":
+				ev = lg.Fatal()
+			case "panic":
+				ev = lg.Panic()
+			default:
+			}
+		default:
+			if ev == nil {
+				ev = lg.Info()
+			}
+			switch key {
+			case zerolog.MessageFieldName:
+				msg = asString(val)
+			default:
+				ev = ev.Interface(key, val)
 			}
 		}
-		ev.Msg("")
+	}
+	ev.Msg(msg)
 
-	})
-	mw3 := hlog.RequestIDHandler("reqid", "")
+	return nil
 
-	return mw1(mw2(mw3(next)))
+}
+
+// Write implement chi/middleware#LogEntry interface.
+func (l ZeroLogger) Write(code, sz int, dur time.Duration) {
+	lg := (*zerolog.Logger)(l)
+	lg.Info().Int("code", code).Int("sz", sz).Dur("dur", dur).Str("src", "http").Msg("")
+}
+
+// Write implement chi/middleware#LogEntry interface.
+func (l ZeroLogger) Panic(v interface{}, stack []byte) {
+	lg := (*zerolog.Logger)(l)
+	lg.Error().Interface("panic", v).Bytes("tb", stack).Str("src", "http").Msg("")
 }
