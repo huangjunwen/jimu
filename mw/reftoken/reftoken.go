@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"github.com/rs/zerolog"
+	"github.com/huangjunwen/MW/mw"
 	"net/http"
 	"net/textproto"
 	"regexp"
@@ -22,7 +22,7 @@ const (
 // Option is the option to to create RefTokenManager.
 type Option func(*RefTokenManager) error
 
-// Store set the kv store to used in RefTokenManager.
+// Store set the kv store to use in RefTokenManager (required).
 func Store(storeURL string) Option {
 	return func(m *RefTokenManager) error {
 		store, err := NewKVStore(storeURL)
@@ -30,6 +30,17 @@ func Store(storeURL string) Option {
 			return err
 		}
 		m.store = store
+		return nil
+	}
+}
+
+// Logger set logger for RefTokenManager (required).
+func Logger(lg mw.Logger) Option {
+	return func(m *RefTokenManager) error {
+		if lg == nil {
+			return fmt.Errorf("Logger is nil")
+		}
+		m.logger = lg
 		return nil
 	}
 }
@@ -80,8 +91,8 @@ func LogoutHeaderName(headerName string) Option {
 	}
 }
 
-// Real2RefRule add a rule specifying how to map a real token (internal) to a
-// ref token (external).
+// Real2RefRule add a rule specifying how to map a (internal) real token to a
+// (external) ref token. (required at least one)
 func Real2RefRule(realTokenHeaderName string, refTokenSetter RefTokenSetter) Option {
 	return func(m *RefTokenManager) error {
 		realTokenHeaderName, err := checkHeaderName(realTokenHeaderName)
@@ -99,12 +110,12 @@ func Real2RefRule(realTokenHeaderName string, refTokenSetter RefTokenSetter) Opt
 	}
 }
 
-// Ref2RealRule add a rule specifying how to map a ref token (external) to a
-// real token (internal).
+// Ref2RealRule add a rule specifying how to map a (external) ref token (external) to a
+// (internal) real token. (required at least one)
 func Ref2RealRule(refTokenGetter RefTokenGetter, realTokenHeaderName string) Option {
 	return func(m *RefTokenManager) error {
 		if refTokenGetter == nil {
-			return fmt.Errorf("refTokenGetter is nil")
+			return fmt.Errorf("RefTokenGetter is nil")
 		}
 		realTokenHeaderName, err := checkHeaderName(realTokenHeaderName)
 		if err != nil {
@@ -118,7 +129,7 @@ func Ref2RealRule(refTokenGetter RefTokenGetter, realTokenHeaderName string) Opt
 	}
 }
 
-// DefaultRules add some default rules for convenient use:
+// DefaultRules add some default rules for convenient:
 //    (external) "Reftoken-Ref-Token"        -> (internal) "Reftoken-Real-Token"
 //    (external) cookie "reftoken"           -> (internal) "Reftoken-Real-Token"
 //    (internal) "Reftoken-Set"              -> (external) "Reftoken-Ref-Token"
@@ -157,6 +168,13 @@ type RefTokenManager struct {
 	// stores refToken -> realToken mapping with ttl.
 	store KVStore
 
+	// Translate rules.
+	real2RefRules []real2RefRule
+	ref2RealRules []ref2RealRule
+
+	// Logger.
+	logger mw.Logger
+
 	// Default ttl in seconds when storing data.
 	ttl int
 
@@ -166,10 +184,6 @@ type RefTokenManager struct {
 	// Special header names.
 	ttlHeaderName    string
 	logoutHeaderName string
-
-	// Translate rules.
-	real2RefRules []real2RefRule
-	ref2RealRules []ref2RealRule
 }
 
 // New create RefTokenManager.
@@ -192,6 +206,9 @@ func New(options ...Option) (*RefTokenManager, error) {
 	if ret.store == nil {
 		return nil, fmt.Errorf("No Store in RefTokenManager")
 	}
+	if ret.logger == nil {
+		return nil, fmt.Errorf("No Logger in RefTokenManager")
+	}
 	if len(ret.ref2RealRules) == 0 {
 		return nil, fmt.Errorf("No Ref2RealRule in RefTokenManager")
 	}
@@ -211,7 +228,7 @@ func (m *RefTokenManager) Wrap(next http.Handler) http.Handler {
 
 func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
 
-	lg := zerolog.Ctx(r.Context())
+	lg := m.logger
 
 	// Apply ref 2 real token rules. Return ref tokens.
 	applyRulesToRequest := func() []string {
@@ -246,13 +263,27 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 		}
 
 		// Translate ref tokens to real tokens.
-		lg.Debug().Strs("get:refTokens", refTokens).Str("src", "reftoken").Msg("")
+		lg.Log(
+			"level", "debug",
+			"src", "reftoken",
+			"message", fmt.Sprintf("store.Get(%v)", refTokens),
+		)
+
 		realTokens, err := m.store.Get(refTokens)
 		if err != nil {
-			lg.Error().Err(fmt.Errorf("KVStore.Get: %s", err)).Str("src", "reftoken").Msg("")
+			lg.Log(
+				"level", "error",
+				"src", "reftoken",
+				"error", fmt.Errorf("store.Get(%v): %s", err),
+			)
 			return nil
 		}
-		lg.Debug().Strs("got:realTokens", realTokens).Str("src", "reftoken").Msg("")
+
+		lg.Log(
+			"level", "debug",
+			"src", "reftoken",
+			"message", fmt.Sprintf("store.Get(...) => %v", realTokens),
+		)
 
 		// Should never happen.
 		if len(realTokens) != len(realTokenHeaderNames) {
@@ -282,10 +313,21 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			return
 		}
 		delete(h, m.logoutHeaderName)
-		lg.Debug().Strs("del:refTokens", existRefTokens).Str("src", "reftoken").Msg("")
+
+		lg.Log(
+			"level", "debug",
+			"src", "reftoken",
+			"message", fmt.Sprintf("store.Del(%v)", existRefTokens),
+		)
+
 		if err := m.store.Del(existRefTokens); err != nil {
-			lg.Error().Err(fmt.Errorf("KVStore.Del: %s", err)).Str("src", "reftoken").Msg("")
+			lg.Log(
+				"level", "error",
+				"src", "reftoken",
+				"error", fmt.Errorf("store.Del(%v): %s", existRefTokens, err),
+			)
 		}
+
 	}
 
 	applyRulesToResponseHeader := func(h http.Header) {
@@ -341,9 +383,18 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			return
 		}
 
-		lg.Debug().Interface("set:kvs", kvs).Int("ttl", ttl).Str("src", "reftoken").Msg("")
+		lg.Log(
+			"level", "debug",
+			"src", "reftoken",
+			"message", fmt.Sprintf("store.set(%v, %d)", kvs, ttl),
+		)
+
 		if err := m.store.Set(kvs, ttl); err != nil {
-			lg.Error().Err(fmt.Errorf("KVStore.Set: %s", err)).Str("src", "reftoken").Msg("")
+			lg.Log(
+				"level", "error",
+				"src", "reftoken",
+				"error", err,
+			)
 			return
 		}
 
