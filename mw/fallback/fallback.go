@@ -3,7 +3,8 @@ package fallback
 import (
 	"context"
 	"fmt"
-	"github.com/rs/zerolog"
+	"github.com/huangjunwen/MW/mw"
+	"github.com/naoina/denco"
 	"github.com/zenazn/goji/web/mutil"
 	"net/http"
 	"runtime/debug"
@@ -11,143 +12,80 @@ import (
 
 type fallbackCtxKeyType int
 
-var (
-	fallbackInfoCtxKey     = fallbackCtxKeyType(0)
-	defaultFallbackHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fi := Info(r)
-		status := fi.Status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		msg := fi.Msg
-		if msg == "" {
-			msg = http.StatusText(status)
-		}
-		http.Error(w, msg, status)
-	})
-)
+var fallbackCtxKey = fallbackCtxKeyType(0)
 
-// FallbackInfo contains information to generate fallback response.
-type FallbackInfo struct {
-	Status int                         // For response. Default 200.
-	Msg    string                      // For response. Default "".
-	Values map[interface{}]interface{} // For response.
-	Error  error                       // For logging
-}
-
-// Clear fallback information.
-func (fi *FallbackInfo) Clear() {
-	fi.Status = 0
-	fi.Msg = ""
-	fi.Values = map[interface{}]interface{}{}
-	fi.Error = nil
-}
-
-// WithStatus set response status for fallback response.
-func (fi *FallbackInfo) WithStatus(status int) *FallbackInfo {
-	fi.Status = status
-	return fi
-}
-
-// WithMsg set response msg for fallback response.
-func (fi *FallbackInfo) WithMsg(msg string) *FallbackInfo {
-	fi.Msg = msg
-	return fi
-}
-
-// WithValue add arbitary key/value for fallback response.
-func (fi *FallbackInfo) WithValue(key, val interface{}) *FallbackInfo {
-	fi.Values[key] = val
-	return fi
-}
-
-// WithError set error for logging.
-func (fi *FallbackInfo) WithError(err error) *FallbackInfo {
-	fi.Error = err
-	return fi
-}
-
-// Info retrive FallbackInfo from request's context or nil if not exists.
-// One can set fallback information like:
-//
-//   func MyHandler(w http.ResponseWriter, r *http.Request) {
-//   	// ...
-//   	if somethingWrong {
-//   		fallback.Info(r).WithError(err).WithStatus(500).WithMsg("Something bad happened")
-//   		return
-//   	}
-//   }
-//
-func Info(r *http.Request) *FallbackInfo {
-	val := r.Context().Value(fallbackInfoCtxKey)
-	if val == nil {
-		return nil
-	}
-	return val.(*FallbackInfo)
-}
-
-// Option is FallbackManager's option.
+// Option is the option in creating FallbackManager.
 type Option func(*FallbackManager) error
 
-// Handler set the fallback handler.
-func Handler(h http.Handler) Option {
-	if h == nil {
-		h = defaultFallbackHandler
-	}
+// Route regists a collection of fallback routes.
+func Routes(routes ...mw.FallbackRoute) Option {
 	return func(m *FallbackManager) error {
-		m.fallbackHandler = h
+		for _, route := range routes {
+			m.routeRecords = append(m.routeRecords, denco.Record{route.Path, route.Handler})
+		}
 		return nil
 	}
 }
 
-// HandlerFunc set the fallback handler.
-func HandlerFunc(f http.HandlerFunc) Option {
-	var h http.Handler = f
-	if h == nil {
-		h = defaultFallbackHandler
-	}
+// LoggerGetter set the LoggerGetter for FallbackManager.
+func LoggerGetter(loggerGetter mw.LoggerGetter) Option {
 	return func(m *FallbackManager) error {
-		m.fallbackHandler = h
+		if loggerGetter == nil {
+			return fmt.Errorf("LoggerGetter is nil")
+		}
+		m.loggerGetter = loggerGetter
 		return nil
 	}
 }
 
-// FallbackManager adds a fallback handler to context which will be invoked
-// when panic or no other response written. User handler can also add extra information to
-// configure how to generate fallback response.
+// FallbackManager is used to regist fallback handlers.
 type FallbackManager struct {
-	fallbackHandler http.Handler
+	routeRecords []denco.Record
+	route        *denco.Router
+	loggerGetter mw.LoggerGetter
 }
 
 // New create FallbackManager with options.
 func New(options ...Option) (*FallbackManager, error) {
 
 	ret := &FallbackManager{}
-	ops := []Option{
-		Handler(nil),
-	}
-	ops = append(ops, options...)
-	for _, op := range ops {
+	for _, op := range options {
 		if err := op(ret); err != nil {
 			return nil, err
 		}
 	}
+	ret.route = denco.New()
+	err := ret.route.Build(ret.routeRecords)
+	if err != nil {
+		return nil, err
+	}
 	return ret, nil
+
 }
 
-// Wrap is the middleware.
-func (m *FallbackManager) Wrap(next http.Handler) http.Handler {
+// Serve implement FallbackHandler: it dispatch request to registed fallback handlers.
+func (m *FallbackManager) Serve(w http.ResponseWriter, r *http.Request, msg string, code int) {
 
-	fallbackHandler := m.fallbackHandler
+	data, _, found := m.route.Lookup(r.URL.Path)
+	if !found {
+		mw.DefaultFallbackHandler(w, r, msg, code)
+		return
+	}
+	data.(mw.FallbackHandler)(w, r, msg, code)
+	return
+
+}
+
+// Wrap is the middleware. It regist the fallback handlers in context.
+func (m *FallbackManager) Wrap(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		var (
+			lg = m.loggerGetter(r.Context())
 			w2 mutil.WriterProxy
 			r2 *http.Request
-			fi = &FallbackInfo{}
 			ok bool
-			lg = zerolog.Ctx(r.Context())
 		)
 
 		// Wrap ResponseWriter to check status.
@@ -155,45 +93,41 @@ func (m *FallbackManager) Wrap(next http.Handler) http.Handler {
 			w2 = mutil.WrapWriter(w)
 		}
 
-		// Install fallback context value.
-		r2 = r.WithContext(context.WithValue(r.Context(), fallbackInfoCtxKey, fi))
+		// Install fallback handler to context.
+		r2 = r.WithContext(context.WithValue(r.Context(), fallbackCtxKey, m.Serve))
 
 		defer func() {
-			hasPanic := false
-			rcv := recover()
 
 			// If panic.
-			if rcv != nil {
-				hasPanic = true
-				err, ok := rcv.(error)
-				if !ok {
-					err = fmt.Errorf("%v", rcv)
-				}
-				fi.Clear()
-				fi.WithError(err).
-					WithStatus(http.StatusInternalServerError).
-					WithMsg(http.StatusText(http.StatusInternalServerError))
+			if rcv := recover(); rcv != nil {
+				lg.Log(
+					"level", "error",
+					"src", "fallback",
+					"error", rcv,
+					"tb", string(debug.Stack()),
+				)
 			}
 
-			// Log if has Error.
-			if fi.Error != nil {
-				ev := lg.Error().Err(fi.Error).Str("src", "fallback")
-				if hasPanic {
-					ev.Bytes("panic", debug.Stack())
-				}
-				ev.Msg("")
-			}
-
-			// If w2.Status() == 0, then w2.WriteHeader is not called. Activate
-			// fallback handler.
+			// If w2.Status() == 0, then w2.WriteHeader is not called.
 			if w2.Status() == 0 {
-				fallbackHandler.ServeHTTP(w2, r2)
+				code := http.StatusInternalServerError
+				m.Serve(w2, r2, http.StatusText(code), code)
 			}
 
 		}()
 
+		// Pass to next.
 		next.ServeHTTP(w2, r2)
 
 	})
 
+}
+
+// FromCtx implement mw.FallbackHandlerGetter.
+func FromCtx(ctx context.Context) mw.FallbackHandler {
+	v := ctx.Value(fallbackCtxKey)
+	if v == nil {
+		return nil
+	}
+	return v.(mw.FallbackHandler)
 }

@@ -1,4 +1,4 @@
-package logging
+package logger
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// ZeroLogger adapt zerolog's logger to Logger interface.
-type ZeroLogger zerolog.Logger
+// Logger adapt zerolog's logger to Logger interface.
+type Logger zerolog.Logger
 
 func asString(v interface{}) string {
 	s, ok := v.(string)
@@ -27,7 +27,7 @@ func asString(v interface{}) string {
 // Log implement mw.Logger interface. NOTE: the first key/value pair should
 // be ("level", "debug"/"info"/"warn"...), otherwise the level will set to
 // "info" even it appears later.
-func (l *ZeroLogger) Log(keyvals ...interface{}) error {
+func (l *Logger) Log(keyvals ...interface{}) error {
 
 	var (
 		lg  = (*zerolog.Logger)(l)
@@ -89,15 +89,15 @@ func (l *ZeroLogger) Log(keyvals ...interface{}) error {
 
 }
 
-// Option is the option in createing ZeroLoggingManager.
-type Option func(*ZeroLoggingManager) error
+// Option is the option in createing LoggerManager.
+type Option func(*LoggerManager) error
 
 // Output set logging's output.
 func Output(w io.Writer) Option {
 	if w == nil {
 		w = os.Stderr
 	}
-	return func(m *ZeroLoggingManager) error {
+	return func(m *LoggerManager) error {
 		m.output = w
 		return nil
 	}
@@ -108,7 +108,7 @@ func ConsoleOutput(w io.Writer, noColor bool) Option {
 	if w == nil {
 		w = os.Stderr
 	}
-	return func(m *ZeroLoggingManager) error {
+	return func(m *LoggerManager) error {
 		m.output = zerolog.ConsoleWriter{Out: w, NoColor: noColor}
 		return nil
 	}
@@ -116,25 +116,25 @@ func ConsoleOutput(w io.Writer, noColor bool) Option {
 
 // ExtraField add an extra field to log for a http request.
 func ExtraField(field string, fieldExtractor func(*http.Request) string) Option {
-	return func(m *ZeroLoggingManager) error {
+	return func(m *LoggerManager) error {
 		m.fields = append(m.fields, field)
 		m.fieldExtractors = append(m.fieldExtractors, fieldExtractor)
 		return nil
 	}
 }
 
-// ZeroLoggingManager adds zerolog's json logger to context and log http requests.
-type ZeroLoggingManager struct {
+// LoggerManager adds zerolog's json logger to context and log http requests.
+type LoggerManager struct {
 	output          io.Writer
 	fields          []string
 	fieldExtractors []func(*http.Request) string
 	logger          zerolog.Logger
 }
 
-// New create ZeroLoggingManager with options.
-func New(options ...Option) (*ZeroLoggingManager, error) {
+// New create LoggerManager with options.
+func New(options ...Option) (*LoggerManager, error) {
 
-	ret := &ZeroLoggingManager{}
+	ret := &LoggerManager{}
 	ops := []Option{
 		Output(nil),
 	}
@@ -151,7 +151,7 @@ func New(options ...Option) (*ZeroLoggingManager, error) {
 }
 
 // Wrap is the middleware.
-func (m *ZeroLoggingManager) Wrap(next http.Handler) http.Handler {
+func (m *LoggerManager) Wrap(next http.Handler) http.Handler {
 
 	mw1 := hlog.NewHandler(m.logger)
 	mw2 := hlog.AccessHandler(func(r *http.Request, status int, sz int, duration time.Duration) {
@@ -182,7 +182,7 @@ func (m *ZeroLoggingManager) Wrap(next http.Handler) http.Handler {
 	return mw1(mw2(mw3(next)))
 }
 
-// ZeroLoggerGetter implement mw.LoggerGetter
-func ZeroLoggerGetter(ctx context.Context) mw.Logger {
-	return (*ZeroLogger)(zerolog.Ctx(ctx))
+// FromCtx implement mw.LoggerGetter
+func FromCtx(ctx context.Context) mw.Logger {
+	return (*Logger)(zerolog.Ctx(ctx))
 }

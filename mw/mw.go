@@ -15,11 +15,23 @@ type Logger interface {
 // LoggerGetter gets Logger from context.
 type LoggerGetter func(context.Context) Logger
 
-// ErrHandler is used to response errors (e.g. 4xx/5xx).
-type ErrHandler func(w http.ResponseWriter, r *http.Request, msg string, code int)
+// FallbackHandler is the secondary handler. Usually used in response errors.
+type FallbackHandler func(w http.ResponseWriter, r *http.Request, msg string, code int)
 
-// DefaultErrHandler == http.Error
-var DefaultErrHandler = func(w http.ResponseWriter, _ *http.Request, msg string, code int) {
+// FallbackHandlerGetter gets FallbackHandler from context.
+type FallbackHandlerGetter func(context.Context) FallbackHandler
+
+// DefaultFallbackHandler == http.Error
+var DefaultFallbackHandler = func(w http.ResponseWriter, _ *http.Request, msg string, code int) {
+	if msg == "" {
+		msg = http.StatusText(code)
+	}
 	http.Error(w, msg, code)
 	return
+}
+
+// FallbackRoute defines a route rule for fallback handler.
+type FallbackRoute struct {
+	Path    string
+	Handler FallbackHandler
 }
