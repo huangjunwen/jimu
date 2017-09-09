@@ -34,13 +34,13 @@ func Store(storeURL string) Option {
 	}
 }
 
-// Logger set logger for RefTokenManager (required).
-func Logger(lg mw.Logger) Option {
+// LoggerGetter set the logger getter for RefTokenManager (required).
+func LoggerGetter(loggerGetter mw.LoggerGetter) Option {
 	return func(m *RefTokenManager) error {
-		if lg == nil {
-			return fmt.Errorf("Logger is nil")
+		if loggerGetter == nil {
+			return fmt.Errorf("LoggerGetter is nil")
 		}
-		m.logger = lg
+		m.loggerGetter = loggerGetter
 		return nil
 	}
 }
@@ -172,8 +172,8 @@ type RefTokenManager struct {
 	real2RefRules []real2RefRule
 	ref2RealRules []ref2RealRule
 
-	// Logger.
-	logger mw.Logger
+	// Logger getter.
+	loggerGetter mw.LoggerGetter
 
 	// Default ttl in seconds when storing data.
 	ttl int
@@ -206,8 +206,8 @@ func New(options ...Option) (*RefTokenManager, error) {
 	if ret.store == nil {
 		return nil, fmt.Errorf("No Store in RefTokenManager")
 	}
-	if ret.logger == nil {
-		return nil, fmt.Errorf("No Logger in RefTokenManager")
+	if ret.loggerGetter == nil {
+		return nil, fmt.Errorf("No LoggerGetter in RefTokenManager")
 	}
 	if len(ret.ref2RealRules) == 0 {
 		return nil, fmt.Errorf("No Ref2RealRule in RefTokenManager")
@@ -228,7 +228,7 @@ func (m *RefTokenManager) Wrap(next http.Handler) http.Handler {
 
 func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
 
-	lg := m.logger
+	lg := m.loggerGetter(r.Context())
 
 	// Apply ref 2 real token rules. Return ref tokens.
 	applyRulesToRequest := func() []string {
