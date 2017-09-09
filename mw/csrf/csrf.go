@@ -1,7 +1,8 @@
 package csrf
 
 import (
-	"github.com/huangjunwen/MW/mw/fallback"
+	"fmt"
+	"github.com/huangjunwen/MW/mw"
 	"github.com/justinas/nosurf"
 	"net/http"
 )
@@ -68,11 +69,23 @@ func CookieNoHttpOnly() Option {
 	}
 }
 
+// FallbackHandler set the fallback handler for failure response.
+func FallbackHandler(fallbackHandler mw.FallbackHandler) Option {
+	return func(m *CsrfManager) error {
+		if fallbackHandler == nil {
+			return fmt.Errorf("FallbackHandler is nil")
+		}
+		m.fallbackHandler = fallbackHandler
+		return nil
+	}
+}
+
 // CsrfManager use nosurf's double submit cookie to defense CSRF attack.
 // Optional depends on fallback to render custom error page.
 type CsrfManager struct {
-	manualVerify bool
-	cookie       http.Cookie
+	manualVerify    bool
+	cookie          http.Cookie
+	fallbackHandler mw.FallbackHandler
 }
 
 // New create CsrfManager.
@@ -89,6 +102,9 @@ func New(options ...Option) (*CsrfManager, error) {
 			return nil, err
 		}
 	}
+	if ret.fallbackHandler == nil {
+		ret.fallbackHandler = mw.DefaultFallbackHandler
+	}
 	return ret, nil
 
 }
@@ -104,12 +120,10 @@ func (m *CsrfManager) Wrap(next http.Handler) http.Handler {
 		})
 	}
 	mw.SetFailureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fi := fallback.Info(r)
-		if fi != nil {
-			fi.WithStatus(http.StatusBadRequest)
-			return
-		}
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		m.fallbackHandler(w, r, &mw.FallbackInfo{
+			Status: http.StatusBadRequest,
+			Msg:    http.StatusText(http.StatusBadRequest),
+		})
 	}))
 	return mw
 
