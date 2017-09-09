@@ -182,7 +182,7 @@ func (m *ZeroLoggingManager) Wrap(next http.Handler) http.Handler {
 	return mw1(mw2(mw3(next)))
 }
 
-// LoggerGetter implement mw.LoggerGetter
-func (m *ZeroLoggingManager) LoggerGetter(ctx context.Context) mw.Logger {
+// ZeroLoggerGetter implement mw.LoggerGetter
+func ZeroLoggerGetter(ctx context.Context) mw.Logger {
 	return (*ZeroLogger)(zerolog.Ctx(ctx))
 }
