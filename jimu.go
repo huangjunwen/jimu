@@ -1,5 +1,5 @@
-// Some common types and interfaces middlewares depend on.
-package mw
+// Some common types and interfaces.
+package jimu
 
 import (
 	"context"

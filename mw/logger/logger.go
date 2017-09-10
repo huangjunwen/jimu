@@ -3,7 +3,7 @@ package logger
 import (
 	"context"
 	"fmt"
-	"github.com/huangjunwen/MW/mw"
+	"github.com/huangjunwen/jimu"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	"io"
@@ -24,7 +24,7 @@ func asString(v interface{}) string {
 	return fmt.Sprint(v)
 }
 
-// Log implement mw.Logger interface. NOTE: the first key/value pair should
+// Log implement jimu.Logger interface. NOTE: the first key/value pair should
 // be ("level", "debug"/"info"/"warn"...), otherwise the level will set to
 // "info" even it appears later.
 func (l *Logger) Log(keyvals ...interface{}) error {
@@ -182,7 +182,7 @@ func (m *LoggerManager) Wrap(next http.Handler) http.Handler {
 	return mw1(mw2(mw3(next)))
 }
 
-// FromCtx implement mw.LoggerGetter
-func FromCtx(ctx context.Context) mw.Logger {
+// FromCtx implement jimu.LoggerGetter
+func FromCtx(ctx context.Context) jimu.Logger {
 	return (*Logger)(zerolog.Ctx(ctx))
 }

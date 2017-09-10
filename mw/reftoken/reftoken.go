@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"github.com/huangjunwen/MW/mw"
+	"github.com/huangjunwen/jimu"
 	"net/http"
 	"net/textproto"
 	"regexp"
@@ -35,7 +35,7 @@ func Store(storeURL string) Option {
 }
 
 // LoggerGetter set the logger getter for RefTokenManager (required).
-func LoggerGetter(loggerGetter mw.LoggerGetter) Option {
+func LoggerGetter(loggerGetter jimu.LoggerGetter) Option {
 	return func(m *RefTokenManager) error {
 		if loggerGetter == nil {
 			return fmt.Errorf("LoggerGetter is nil")
@@ -173,7 +173,7 @@ type RefTokenManager struct {
 	ref2RealRules []ref2RealRule
 
 	// Logger getter.
-	loggerGetter mw.LoggerGetter
+	loggerGetter jimu.LoggerGetter
 
 	// Default ttl in seconds when storing data.
 	ttl int

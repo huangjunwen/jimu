@@ -1,4 +1,5 @@
-MW
+Jimu (积木)
 ===
 
-My golang HTTP middleware collection. Some are thin wrappers from other mature libraries. Some are written myself. All of them should work together seamlessly.
+A collection of middlewares. Some are thin wrappers from other mature libraries. Some are written myself. 
+

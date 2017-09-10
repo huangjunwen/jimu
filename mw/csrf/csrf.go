@@ -2,7 +2,7 @@ package csrf
 
 import (
 	"fmt"
-	"github.com/huangjunwen/MW/mw"
+	"github.com/huangjunwen/jimu"
 	"github.com/justinas/nosurf"
 	"net/http"
 )
@@ -70,7 +70,7 @@ func CookieNoHttpOnly() Option {
 }
 
 // FallbackHandler set the fallback handler for failure response.
-func FallbackHandler(fallbackHandler mw.FallbackHandler) Option {
+func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
 	return func(m *CsrfManager) error {
 		if fallbackHandler == nil {
 			return fmt.Errorf("FallbackHandler is nil")
@@ -85,7 +85,7 @@ func FallbackHandler(fallbackHandler mw.FallbackHandler) Option {
 type CsrfManager struct {
 	manualVerify    bool
 	cookie          http.Cookie
-	fallbackHandler mw.FallbackHandler
+	fallbackHandler jimu.FallbackHandler
 }
 
 // New create CsrfManager.
@@ -96,14 +96,12 @@ func New(options ...Option) (*CsrfManager, error) {
 			Path:     "/",
 			HttpOnly: true,
 		},
+		fallbackHandler: jimu.DefaultFallbackHandler,
 	}
 	for _, op := range options {
 		if err := op(ret); err != nil {
 			return nil, err
 		}
-	}
-	if ret.fallbackHandler == nil {
-		ret.fallbackHandler = mw.DefaultFallbackHandler
 	}
 	return ret, nil
 
@@ -120,7 +118,7 @@ func (m *CsrfManager) Wrap(next http.Handler) http.Handler {
 		})
 	}
 	mw.SetFailureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.fallbackHandler(w, r, &mw.FallbackInfo{
+		m.fallbackHandler(w, r, &jimu.FallbackInfo{
 			Status: http.StatusBadRequest,
 			Msg:    http.StatusText(http.StatusBadRequest),
 		})

@@ -2,7 +2,7 @@ package recover
 
 import (
 	"fmt"
-	"github.com/huangjunwen/MW/mw"
+	"github.com/huangjunwen/jimu"
 	"github.com/zenazn/goji/web/mutil"
 	"net/http"
 	"runtime/debug"
@@ -12,7 +12,7 @@ import (
 type Option func(*RecoverManager) error
 
 // LoggerGetter set the LoggerGetter for RecoverManager.
-func LoggerGetter(loggerGetter mw.LoggerGetter) Option {
+func LoggerGetter(loggerGetter jimu.LoggerGetter) Option {
 	return func(m *RecoverManager) error {
 		if loggerGetter == nil {
 			return fmt.Errorf("LoggerGetter is nil")
@@ -23,7 +23,7 @@ func LoggerGetter(loggerGetter mw.LoggerGetter) Option {
 }
 
 // FallbackHandler set the FallbackHandler for RecoverManager.
-func FallbackHandler(fallbackHandler mw.FallbackHandler) Option {
+func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
 	return func(m *RecoverManager) error {
 		if fallbackHandler == nil {
 			return fmt.Errorf("FallbackHandler is nil")
@@ -35,14 +35,16 @@ func FallbackHandler(fallbackHandler mw.FallbackHandler) Option {
 
 // RecoverManager recover from panic.
 type RecoverManager struct {
-	loggerGetter    mw.LoggerGetter
-	fallbackHandler mw.FallbackHandler
+	loggerGetter    jimu.LoggerGetter
+	fallbackHandler jimu.FallbackHandler
 }
 
 // New creates RecoverManager with options.
 func New(options ...Option) (*RecoverManager, error) {
 
-	ret := &RecoverManager{}
+	ret := &RecoverManager{
+		fallbackHandler: jimu.DefaultFallbackHandler,
+	}
 	for _, op := range options {
 		if err := op(ret); err != nil {
 			return nil, err
@@ -50,9 +52,6 @@ func New(options ...Option) (*RecoverManager, error) {
 	}
 	if ret.loggerGetter == nil {
 		return nil, fmt.Errorf("Missing LoggerGetter")
-	}
-	if ret.fallbackHandler == nil {
-		ret.fallbackHandler = mw.DefaultFallbackHandler
 	}
 	return ret, nil
 }
@@ -87,7 +86,7 @@ func (m *RecoverManager) Wrap(next http.Handler) http.Handler {
 
 			// Response 500 only when w2 has not wrote.
 			if w2.Status() == 0 {
-				m.fallbackHandler(w2, r, &mw.FallbackInfo{
+				m.fallbackHandler(w2, r, &jimu.FallbackInfo{
 					Status: http.StatusInternalServerError,
 					Msg:    http.StatusText(http.StatusInternalServerError),
 				})
