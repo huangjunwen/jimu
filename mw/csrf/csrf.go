@@ -118,10 +118,7 @@ func (m *CsrfManager) Wrap(next http.Handler) http.Handler {
 		})
 	}
 	mw.SetFailureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.fallbackHandler(w, r, &jimu.FallbackInfo{
-			Status: http.StatusBadRequest,
-			Msg:    http.StatusText(http.StatusBadRequest),
-		})
+		m.fallbackHandler(w, r, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	}))
 	return mw
 

@@ -86,10 +86,8 @@ func (m *RecoverManager) Wrap(next http.Handler) http.Handler {
 
 			// Response 500 only when w2 has not wrote.
 			if w2.Status() == 0 {
-				m.fallbackHandler(w2, r, &jimu.FallbackInfo{
-					Status: http.StatusInternalServerError,
-					Msg:    http.StatusText(http.StatusInternalServerError),
-				})
+				m.fallbackHandler(w2, r, http.StatusText(http.StatusInternalServerError),
+					http.StatusInternalServerError)
 			}
 
 		}()

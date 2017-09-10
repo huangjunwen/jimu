@@ -15,23 +15,14 @@ type Logger interface {
 // LoggerGetter gets Logger from context.
 type LoggerGetter func(context.Context) Logger
 
-// FallbackInfo is used to store information of fallback response.
-type FallbackInfo struct {
-	Status int
-	Msg    string
-	Data   map[interface{}]interface{}
-}
+// FallbackHandler is used for fallback response. Usually used for 4xx/5xx.
+type FallbackHandler func(http.ResponseWriter, *http.Request, string, int)
 
-// FallbackHandler is used for fallback response.
-type FallbackHandler func(http.ResponseWriter, *http.Request, *FallbackInfo)
-
-// DefaultFallbackHandler use http.Error to response.
-var DefaultFallbackHandler = func(w http.ResponseWriter, _ *http.Request, fi *FallbackInfo) {
-	status := fi.Status
+// DefaultFallbackHandler == http.Error.
+var DefaultFallbackHandler = func(w http.ResponseWriter, _ *http.Request, msg string, status int) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	msg := fi.Msg
 	if msg == "" {
 		msg = http.StatusText(status)
 	}

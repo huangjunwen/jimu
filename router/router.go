@@ -88,19 +88,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	data, params, found := r.router.Lookup(req.URL.Path)
 	if !found {
-		r.FallbackHandler(w, req, &jimu.FallbackInfo{
-			Status: http.StatusNotFound,
-			Msg:    http.StatusText(http.StatusNotFound),
-		})
+		r.FallbackHandler(w, req, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 
 	handler, found2 := data.(map[string]http.Handler)[req.Method]
 	if !found2 {
-		r.FallbackHandler(w, req, &jimu.FallbackInfo{
-			Status: http.StatusMethodNotAllowed,
-			Msg:    http.StatusText(http.StatusMethodNotAllowed),
-		})
+		r.FallbackHandler(w, req, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -149,7 +143,7 @@ func (r *FallbackRouter) Build() error {
 }
 
 // Serve implement FallbackHandler.
-func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, fi *jimu.FallbackInfo) {
+func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, msg string, status int) {
 
 	if r.router == nil {
 		panic(fmt.Errorf("Router is not built."))
@@ -158,10 +152,10 @@ func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, fi *jim
 	data, params, found := r.router.Lookup(req.URL.Path)
 	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
 	if !found {
-		jimu.DefaultFallbackHandler(w, req, fi)
+		jimu.DefaultFallbackHandler(w, req, msg, status)
 		return
 	}
-	data.(jimu.FallbackHandler)(w, req, fi)
+	data.(jimu.FallbackHandler)(w, req, msg, status)
 	return
 }
 
