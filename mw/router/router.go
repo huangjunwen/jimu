@@ -3,8 +3,8 @@ package router
 import (
 	"context"
 	"fmt"
-	"github.com/huangjunwen/MW/mw/fallback"
-	"github.com/julienschmidt/httprouter"
+	"github.com/huangjunwen/MW/mw"
+	"github.com/naoina/denco"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,63 +16,92 @@ type paramsCtxKeyType int
 
 var paramsCtxKey = paramsCtxKeyType(0)
 
-// Router is a thin wrapper of httprouter.Router
-// Waiting for https://github.com/julienschmidt/httprouter/pull/147.
+// Router is a wrapper around denco's router.
 type Router struct {
-	*httprouter.Router
+	// path -> method -> handler
+	handlerEntires map[string]map[string]http.Handler
+	router         *denco.Router
+
+	// Set fallback handler for router.
+	mw.FallbackHandler
 }
 
-// New create a new Router.
+// New creates a Router.
 func New() *Router {
-	ret := &Router{
-		Router: httprouter.New(),
+	return &Router{
+		handlerEntires:  map[string]map[string]http.Handler{},
+		FallbackHandler: mw.DefaultFallbackHandler,
+	}
+}
+
+// Handler add an http handler to the router.
+func (r *Router) Handler(path string, handler http.Handler, methods ...string) {
+
+	for _, method := range methods {
+		method = strings.ToUpper(method)
+		if _, found := r.handlerEntires[path]; !found {
+			r.handlerEntires[path] = map[string]http.Handler{}
+		}
+		r.handlerEntires[path][method] = handler
 	}
 
-	ret.Router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fi := fallback.Info(r)
-		if fi == nil {
-			http.NotFound(w, r)
-			return
-		}
-		fi.WithStatus(http.StatusNotFound)
-		return
-	})
-
-	ret.Router.MethodNotAllowed = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fi := fallback.Info(r)
-		if fi == nil {
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
-		}
-		fi.WithStatus(http.StatusMethodNotAllowed)
-		return
-	})
-
-	return ret
 }
 
-// Handler regist http.Handler to the router.
-func (r *Router) Handler(method, pathPattern string, h http.Handler) {
-	r.Router.Handle(method, pathPattern,
-		func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
-			h.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params)))
-		},
-	)
+// HandlerFunc add an http handler func to the router.
+func (r *Router) HandlerFunc(path string, handlerFunc http.HandlerFunc, methods ...string) {
+	r.Handler(path, handlerFunc, methods...)
 }
 
-// HandlerFunc regist http.HandlerFunc to the router.
-func (r *Router) HandlerFunc(method, pathPattern string, h http.HandlerFunc) {
-	r.Handler(method, pathPattern, h)
+// Build construct/re-construct router.
+func (r *Router) Build() error {
+
+	records := []denco.Record{}
+	for path, data := range r.handlerEntires {
+		records = append(records, denco.Record{
+			Key:   path,
+			Value: data,
+		})
+	}
+
+	router := denco.New()
+	if err := router.Build(records); err != nil {
+		return err
+	}
+	r.router = router
+
+	return nil
+
 }
 
-// ServeHTTP implement http.Handler interface.
+// ServeHTTP implement http.Handler.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	r.Router.ServeHTTP(w, req)
+
+	data, params, found := r.router.Lookup(req.URL.Path)
+	if !found {
+		r.FallbackHandler(w, req, &mw.FallbackInfo{
+			Status: http.StatusNotFound,
+			Msg:    http.StatusText(http.StatusNotFound),
+		})
+		return
+	}
+
+	handler, found2 := data.(map[string]http.Handler)[req.Method]
+	if !found2 {
+		r.FallbackHandler(w, req, &mw.FallbackInfo{
+			Status: http.StatusMethodNotAllowed,
+			Msg:    http.StatusText(http.StatusMethodNotAllowed),
+		})
+		return
+	}
+
+	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
+	handler.ServeHTTP(w, req)
+	return
 }
 
 // ParamsFromContext extract path params.
-func ParamsFromContext(ctx context.Context) httprouter.Params {
-	p, _ := ctx.Value(paramsCtxKey).(httprouter.Params)
+func ParamsFromContext(ctx context.Context) denco.Params {
+	p, _ := ctx.Value(paramsCtxKey).(denco.Params)
 	return p
 }
 
@@ -127,13 +156,4 @@ func BuildPath(pathPattern string, params ...interface{}) (string, error) {
 	}
 	return path.Join(ret, path.Join(wildcardParts...)), nil
 
-}
-
-// BuildPath is the reverse of matching: substitute ":name" and "*name"
-func BuildPathFromParams(pathPattern string, params httprouter.Params) (string, error) {
-	ps := make([]interface{}, len(params))
-	for i, p := range params {
-		ps[i] = p.Value
-	}
-	return BuildPath(pathPattern, ps...)
 }
