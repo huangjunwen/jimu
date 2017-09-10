@@ -1,4 +1,4 @@
-// Some common types and interfaces.
+// Common interfaces/types that middlewares and utilites depend on.
 package jimu
 
 import (

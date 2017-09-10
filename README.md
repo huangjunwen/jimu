@@ -1,4 +1,4 @@
-Jimu (积木)
+Jimu (积木) [![GoDoc](https://godoc.org/github.com/huangjunwen/jimu?status.svg)](http://godoc.org/github.com/huangjunwen/jimu)
 ===
 
 A collection of middlewares and http utilites. Some are thin wrappers from other mature libraries.
