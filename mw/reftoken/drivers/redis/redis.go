@@ -3,7 +3,7 @@ package redis
 import (
 	"fmt"
 	"github.com/garyburd/redigo/redis"
-	"github.com/huangjunwen/MW/mw/reftoken"
+	"github.com/huangjunwen/jimu/mw/reftoken"
 	"net/url"
 	"strconv"
 	"strings"

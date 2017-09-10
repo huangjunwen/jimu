@@ -72,6 +72,14 @@ func (l *Logger) Log(keyvals ...interface{}) error {
 				ev = lg.Info()
 			}
 			switch key {
+			case zerolog.TimestampFieldName:
+				// Do nothing
+			case zerolog.ErrorFieldName:
+				err, ok := val.(error)
+				if !ok {
+					err = fmt.Errorf("%v", val)
+				}
+				ev = ev.Err(err)
 			case zerolog.MessageFieldName:
 				msg = asString(val)
 			default:

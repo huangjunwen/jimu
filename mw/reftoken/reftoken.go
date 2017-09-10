@@ -274,7 +274,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			lg.Log(
 				"level", "error",
 				"src", "reftoken",
-				"error", fmt.Errorf("store.Get(%v): %s", err),
+				"error", fmt.Errorf("store.Get(%v): %s", refTokens, err),
 			)
 			return nil
 		}
