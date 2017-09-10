@@ -1,7 +1,7 @@
 Jimu (积木)
 ===
 
-A collection of middlewares and http utilites. Some are thin wrappers from other mature libraries. Some are written myself. 
+A collection of middlewares and http utilites. Some are thin wrappers from other mature libraries.
 
 | **Path** | **Description** |
 |----------|-----------------|
