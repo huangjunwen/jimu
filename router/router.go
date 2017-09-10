@@ -3,7 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
-	"github.com/huangjunwen/MW/mw"
+	"github.com/huangjunwen/jimu"
 	"github.com/naoina/denco"
 	"net/http"
 	"net/url"
@@ -16,6 +16,12 @@ type paramsCtxKeyType int
 
 var paramsCtxKey = paramsCtxKeyType(0)
 
+// ParamsFromContext extract path params.
+func ParamsFromContext(ctx context.Context) denco.Params {
+	p, _ := ctx.Value(paramsCtxKey).(denco.Params)
+	return p
+}
+
 // Router is a wrapper around denco's router.
 type Router struct {
 	// path -> method -> handler
@@ -23,14 +29,14 @@ type Router struct {
 	router         *denco.Router
 
 	// Set fallback handler for router.
-	mw.FallbackHandler
+	jimu.FallbackHandler
 }
 
 // New creates a Router.
 func New() *Router {
 	return &Router{
 		handlerEntires:  map[string]map[string]http.Handler{},
-		FallbackHandler: mw.DefaultFallbackHandler,
+		FallbackHandler: jimu.DefaultFallbackHandler,
 	}
 }
 
@@ -76,9 +82,13 @@ func (r *Router) Build() error {
 // ServeHTTP implement http.Handler.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
+	if r.router == nil {
+		panic(fmt.Errorf("Router is not built."))
+	}
+
 	data, params, found := r.router.Lookup(req.URL.Path)
 	if !found {
-		r.FallbackHandler(w, req, &mw.FallbackInfo{
+		r.FallbackHandler(w, req, &jimu.FallbackInfo{
 			Status: http.StatusNotFound,
 			Msg:    http.StatusText(http.StatusNotFound),
 		})
@@ -87,7 +97,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	handler, found2 := data.(map[string]http.Handler)[req.Method]
 	if !found2 {
-		r.FallbackHandler(w, req, &mw.FallbackInfo{
+		r.FallbackHandler(w, req, &jimu.FallbackInfo{
 			Status: http.StatusMethodNotAllowed,
 			Msg:    http.StatusText(http.StatusMethodNotAllowed),
 		})
@@ -99,10 +109,60 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
-// ParamsFromContext extract path params.
-func ParamsFromContext(ctx context.Context) denco.Params {
-	p, _ := ctx.Value(paramsCtxKey).(denco.Params)
-	return p
+// FallbackRouter is used to regist fallback handlers.
+type FallbackRouter struct {
+	// path -> handler
+	handlerEntires map[string]jimu.FallbackHandler
+	router         *denco.Router
+}
+
+// NewFallbackRouter creates a FallbackRouter.
+func NewFallbackRouter() *FallbackRouter {
+	return &FallbackRouter{
+		handlerEntires: map[string]jimu.FallbackHandler{},
+	}
+}
+
+// Handler add a FallbackHandler to the router.
+func (r *FallbackRouter) Handler(path string, handler jimu.FallbackHandler) {
+	r.handlerEntires[path] = handler
+}
+
+// Build construct/re-construct router.
+func (r *FallbackRouter) Build() error {
+
+	records := []denco.Record{}
+	for path, handler := range r.handlerEntires {
+		records = append(records, denco.Record{
+			Key:   path,
+			Value: handler,
+		})
+	}
+
+	router := denco.New()
+	if err := router.Build(records); err != nil {
+		return err
+	}
+	r.router = router
+
+	return nil
+}
+
+// Serve implement FallbackHandler.
+func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, fi *jimu.FallbackInfo) {
+
+	if r.router == nil {
+		panic(fmt.Errorf("Router is not built."))
+	}
+
+	data, params, found := r.router.Lookup(req.URL.Path)
+	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
+	if !found {
+		jimu.DefaultFallbackHandler(w, req, fi)
+		return
+	}
+	data.(jimu.FallbackHandler)(w, req, fi)
+	return
 }
 
 var (
@@ -112,8 +172,9 @@ var (
 	TooManyparams   = fmt.Errorf("Too many params to substitute")
 )
 
-// BuildPath is the reverse of matching: substitute ":name" and "*name"
-// Params are Sprint into string.
+// BuildPath is the reverse of matching:
+//   BuildPath("/do/:action/at/*location", "clean", "room/1") -> "/do/clean/at/room/1"
+// Params can be string, denco.Param or any Sprint-able object.
 func BuildPath(pathPattern string, params ...interface{}) (string, error) {
 
 	var err error
@@ -124,7 +185,15 @@ func BuildPath(pathPattern string, params ...interface{}) (string, error) {
 			err = NotEnoughParams
 			return ""
 		}
-		s := fmt.Sprint(params[i])
+		var s string
+		switch v := params[i].(type) {
+		case string:
+			s = v
+		case denco.Param:
+			s = v.Value
+		default:
+			s = fmt.Sprint(v)
+		}
 		i += 1
 		// '*' case.
 		// Wildcard is a path, should use path.Join instead simply substitute.
