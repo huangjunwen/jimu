@@ -306,3 +306,14 @@ func (p *Path) Build(params ...interface{}) (string, error) {
 	return path.Join(strings.Join(parts, ""), wildcard), nil
 
 }
+
+// Build a full url.
+func (p *Path) BuildURL(baseURL *url.URL, params ...interface{}) (string, error) {
+	pp, err := p.Build(params...)
+	if err != nil {
+		return "", err
+	}
+	cpyURL := *baseURL
+	cpyURL.Path = path.Join(cpyURL.Path, pp)
+	return cpyURL.String(), nil
+}
