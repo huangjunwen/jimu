@@ -166,19 +166,110 @@ var (
 	TooManyparams   = fmt.Errorf("Too many params to substitute")
 )
 
-// BuildPath is the reverse of matching:
-//   BuildPath("/do/:action/at/*location", "clean", "room/1") -> "/do/clean/at/room/1"
-// Params can be string, denco.Param or any Sprint-able object.
-func BuildPath(pathPattern string, params ...interface{}) (string, error) {
+type Path struct {
+	path string
 
-	var err error
-	var wildcard string
+	// i == 0: for wildcard, e.g. "*location"
+	// i > 0: for nonParams, e.g. "/do/"
+	// i < 0: for params, e.g. ":action"
+	partIndices  []int
+	nonParams    []string
+	paramNames   []string
+	wildcardName string
+}
+
+// NewPath creates a Path.
+func NewPath(path string) (*Path, error) {
+
+	ret := &Path{
+		path:        path,
+		partIndices: []int{},
+		nonParams:   []string{},
+		paramNames:  []string{},
+	}
+
 	i := 0
-	ret := paramRe.ReplaceAllStringFunc(pathPattern, func(origin string) string {
-		if i >= len(params) {
-			err = NotEnoughParams
-			return ""
+	for _, loc := range paramRe.FindAllStringIndex(path, -1) {
+
+		// Store non param part.
+		nonParam := path[i:loc[0]]
+		if len(nonParam) != 0 {
+			ret.nonParams = append(ret.nonParams, nonParam)
+			ret.partIndices = append(ret.partIndices, len(ret.nonParams))
 		}
+
+		// Store param part.
+		name := path[loc[0]+1 : loc[1]]
+		switch path[loc[0]] {
+		case ':':
+			ret.paramNames = append(ret.paramNames, name)
+			ret.partIndices = append(ret.partIndices, -len(ret.paramNames))
+		case '*':
+			ret.wildcardName = name
+			ret.partIndices = append(ret.partIndices, 0)
+		default:
+			panic(fmt.Errorf("Neither '*' or ':'?"))
+		}
+
+		// Move i
+		i = loc[1]
+
+	}
+
+	// Store the remain non param part.
+	nonParam := path[i:]
+	if len(nonParam) != 0 {
+		if ret.wildcardName != "" {
+			return nil, fmt.Errorf("Wildcard '*param' should be the last part of path")
+		}
+		ret.nonParams = append(ret.nonParams, nonParam)
+		ret.partIndices = append(ret.partIndices, len(ret.nonParams))
+	}
+
+	return ret, nil
+
+}
+
+// MustPath creates a path or panic if there is error.
+func MustPath(path string) *Path {
+	p, err := NewPath(path)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+// String implement Stringer interface. Return the path pattern.
+func (p *Path) String() string {
+	return p.path
+}
+
+// Build concrete path from params. Param can be string, denco.Param or any fmt.Sprint-able object.
+func (p *Path) Build(params ...interface{}) (string, error) {
+
+	n := len(p.paramNames)
+	if p.wildcardName != "" {
+		n += 1
+	}
+
+	if len(params) < n {
+		return "", NotEnoughParams
+	} else if len(params) > n {
+		return "", TooManyparams
+	}
+
+	parts := make([]string, len(p.partIndices))
+	i := 0
+	wildcard := ""
+	for j, idx := range p.partIndices {
+
+		// Non param part.
+		if idx > 0 {
+			parts[j] = p.nonParams[idx-1]
+			continue
+		}
+
+		// Param part.
 		var s string
 		switch v := params[i].(type) {
 		case string:
@@ -189,34 +280,29 @@ func BuildPath(pathPattern string, params ...interface{}) (string, error) {
 			s = fmt.Sprint(v)
 		}
 		i += 1
-		// '*' case.
-		// Wildcard is a path, should use path.Join instead simply substitute.
-		if origin[0] == '*' {
-			wildcard = s
-			return ""
-		}
-		// ':'
-		// Wildcard has already encountered.
-		if wildcard != "" {
-			err = BadPathPattern
-			return ""
-		}
-		return url.PathEscape(s)
 
-	})
-	if err != nil {
-		return "", err
+		// ':' case.
+		if idx < 0 {
+			parts[j] = url.PathEscape(s)
+			continue
+		}
+
+		// '*' case.
+		wildcard = s
+
 	}
-	if i < len(params) {
-		return "", TooManyparams
+
+	// wildcard is the rest of path. Should be clean and join.
+	if wildcard != "" {
+		// Add "/" and clean to make sure wildcard does not escape to upper level.
+		wildcard = path.Clean("/" + wildcard)
+		wildcardParts := strings.Split(wildcard, "/")
+		for k := 0; k < len(wildcardParts); k++ {
+			wildcardParts[k] = url.PathEscape(wildcardParts[k])
+		}
+		wildcard = path.Join(wildcardParts...)
 	}
-	if wildcard == "" {
-		return ret, nil
-	}
-	wildcardParts := strings.Split(wildcard, "/")
-	for i = 0; i < len(wildcardParts); i++ {
-		wildcardParts[i] = url.PathEscape(wildcardParts[i])
-	}
-	return path.Join(ret, path.Join(wildcardParts...)), nil
+
+	return path.Join(strings.Join(parts, ""), wildcard), nil
 
 }
