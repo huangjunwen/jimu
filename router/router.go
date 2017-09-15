@@ -62,7 +62,7 @@ func (r *Router) Options(options ...Option) {
 	if r.configured() {
 		panic(jimu.ErrComponentConfigured)
 	}
-	r.options = append(r.options, options)
+	r.options = append(r.options, options...)
 }
 
 // Handler add an http handler to the router.
