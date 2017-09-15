@@ -97,7 +97,7 @@ func (l *Logger) Log(keyvals ...interface{}) error {
 
 }
 
-// Option is the option in createing LoggerManager.
+// Option is the option of LoggerManager.
 type Option func(*LoggerManager) error
 
 // Output set logging's output.
@@ -133,33 +133,56 @@ func ExtraField(field string, fieldExtractor func(*http.Request) string) Option 
 
 // LoggerManager adds zerolog's json logger to context and log http requests.
 type LoggerManager struct {
+	options         []Option
 	output          io.Writer
 	fields          []string
 	fieldExtractors []func(*http.Request) string
 	logger          zerolog.Logger
 }
 
-// New create LoggerManager with options.
-func New(options ...Option) (*LoggerManager, error) {
-
-	ret := &LoggerManager{}
-	ops := []Option{
-		Output(nil),
+// New create LoggerManager.
+func New() *LoggerManager {
+	return &LoggerManager{
+		options: []Option{
+			Output(nil),
+		},
 	}
-	ops = append(ops, options...)
-	for _, op := range ops {
-		if err := op(ret); err != nil {
-			return nil, err
+}
+
+func (m *LoggerManager) configured() bool {
+	return m.output != nil
+}
+
+// Options add options to the manager.
+func (m *LoggerManager) Options(options ...Option) {
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	m.options = append(m.options, options...)
+}
+
+// Configure the manager. Options are not allowed to add after configure.
+func (m *LoggerManager) Configure() error {
+
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	for _, op := range m.options {
+		if err := op(m); err != nil {
+			return err
 		}
 	}
-
-	ret.logger = zerolog.New(ret.output).With().Timestamp().Logger()
-	return ret, nil
+	m.logger = zerolog.New(m.output).With().Timestamp().Logger()
+	return nil
 
 }
 
 // Wrap is the middleware.
 func (m *LoggerManager) Wrap(next http.Handler) http.Handler {
+
+	if !m.configured() {
+		panic(jimu.ErrComponentNotConfigured)
+	}
 
 	mw1 := hlog.NewHandler(m.logger)
 	mw2 := hlog.AccessHandler(func(r *http.Request, status int, sz int, duration time.Duration) {

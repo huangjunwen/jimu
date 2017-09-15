@@ -8,10 +8,10 @@ import (
 	"runtime/debug"
 )
 
-// Option is the option in creating RecoverManager.
+// Option is the option of RecoverManager.
 type Option func(*RecoverManager) error
 
-// LoggerGetter set the LoggerGetter for RecoverManager.
+// LoggerGetter set the LoggerGetter for RecoverManager. (required)
 func LoggerGetter(loggerGetter jimu.LoggerGetter) Option {
 	return func(m *RecoverManager) error {
 		if loggerGetter == nil {
@@ -35,29 +35,55 @@ func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
 
 // RecoverManager recover from panic.
 type RecoverManager struct {
+	options         []Option
 	loggerGetter    jimu.LoggerGetter
 	fallbackHandler jimu.FallbackHandler
 }
 
-// New creates RecoverManager with options.
-func New(options ...Option) (*RecoverManager, error) {
-
-	ret := &RecoverManager{
-		fallbackHandler: jimu.DefaultFallbackHandler,
+// New creates RecoverManager.
+func New() *RecoverManager {
+	return &RecoverManager{
+		options: []Option{
+			FallbackHandler(jimu.DefaultFallbackHandler),
+		},
 	}
-	for _, op := range options {
-		if err := op(ret); err != nil {
-			return nil, err
+}
+
+func (m *RecoverManager) configured() bool {
+	return m.fallbackHandler != nil
+}
+
+// Options add options to the manager.
+func (m *RecoverManager) Options(options ...Option) {
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	m.options = append(m.options, options...)
+}
+
+// Configure the manager. Options are not allowed to add after configure.
+func (m *RecoverManager) Configure() error {
+
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	for _, op := range m.options {
+		if err := op(m); err != nil {
+			return err
 		}
 	}
-	if ret.loggerGetter == nil {
-		return nil, fmt.Errorf("Missing LoggerGetter")
+	if m.loggerGetter == nil {
+		return fmt.Errorf("Missing LoggerGetter")
 	}
-	return ret, nil
+	return nil
 }
 
 // Wrap is the middleware.
 func (m *RecoverManager) Wrap(next http.Handler) http.Handler {
+
+	if !m.configured() {
+		panic(jimu.ErrComponentNotConfigured)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 

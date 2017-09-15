@@ -22,27 +22,55 @@ func ParamsFromContext(ctx context.Context) denco.Params {
 	return p
 }
 
+// Option for configuring Router.
+type Option func(*Router) error
+
+// FallbackHandler set the fallback handler (for 404 ...) for the router.
+func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
+	return func(r *Router) error {
+		r.fallbackHandler = fallbackHandler
+		return nil
+	}
+}
+
 // Router is a wrapper around denco's router.
 type Router struct {
 	// path -> method -> handler
 	handlerEntires map[string]map[string]http.Handler
 	router         *denco.Router
 
-	// Set fallback handler for router.
-	jimu.FallbackHandler
+	options         []Option
+	fallbackHandler jimu.FallbackHandler
 }
 
 // New creates a Router.
 func New() *Router {
 	return &Router{
-		handlerEntires:  map[string]map[string]http.Handler{},
-		FallbackHandler: jimu.DefaultFallbackHandler,
+		handlerEntires: map[string]map[string]http.Handler{},
+		options: []Option{
+			FallbackHandler(jimu.DefaultFallbackHandler),
+		},
 	}
+}
+
+func (r *Router) configured() bool {
+	return r.router != nil
+}
+
+// Options add options for the router.
+func (r *Router) Options(options ...Option) {
+	if r.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	r.options = append(r.options, options)
 }
 
 // Handler add an http handler to the router.
 func (r *Router) Handler(path string, handler http.Handler, methods ...string) {
 
+	if r.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
 	for _, method := range methods {
 		method = strings.ToUpper(method)
 		if _, found := r.handlerEntires[path]; !found {
@@ -58,8 +86,18 @@ func (r *Router) HandlerFunc(path string, handlerFunc http.HandlerFunc, methods 
 	r.Handler(path, handlerFunc, methods...)
 }
 
-// Build construct/re-construct router.
-func (r *Router) Build() error {
+// Configure process options and construct router.
+func (r *Router) Configure() error {
+
+	if r.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+
+	for _, op := range r.options {
+		if err := op(r); err != nil {
+			return err
+		}
+	}
 
 	records := []denco.Record{}
 	for path, data := range r.handlerEntires {
@@ -82,19 +120,19 @@ func (r *Router) Build() error {
 // ServeHTTP implement http.Handler.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
-	if r.router == nil {
-		panic(fmt.Errorf("Router is not built."))
+	if !r.configured() {
+		panic(jimu.ErrComponentNotConfigured)
 	}
 
 	data, params, found := r.router.Lookup(req.URL.Path)
 	if !found {
-		r.FallbackHandler(w, req, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		r.fallbackHandler(w, req, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 
 	handler, found2 := data.(map[string]http.Handler)[req.Method]
 	if !found2 {
-		r.FallbackHandler(w, req, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		r.fallbackHandler(w, req, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -117,14 +155,24 @@ func NewFallbackRouter() *FallbackRouter {
 	}
 }
 
+func (r *FallbackRouter) configured() bool {
+	return r.router != nil
+}
+
 // Handler add a FallbackHandler to the router.
 func (r *FallbackRouter) Handler(path string, handler jimu.FallbackHandler) {
+	if r.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
 	r.handlerEntires[path] = handler
 }
 
-// Build construct/re-construct router.
-func (r *FallbackRouter) Build() error {
+// Configure construct router.
+func (r *FallbackRouter) Configure() error {
 
+	if r.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
 	records := []denco.Record{}
 	for path, handler := range r.handlerEntires {
 		records = append(records, denco.Record{
@@ -145,8 +193,8 @@ func (r *FallbackRouter) Build() error {
 // Serve implement FallbackHandler.
 func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, msg string, status int) {
 
-	if r.router == nil {
-		panic(fmt.Errorf("Router is not built."))
+	if !r.configured() {
+		panic(jimu.ErrComponentNotConfigured)
 	}
 
 	data, params, found := r.router.Lookup(req.URL.Path)

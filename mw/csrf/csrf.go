@@ -61,10 +61,10 @@ func CookieSecure() Option {
 	}
 }
 
-// CookieNoHttpOnly unset csrf cookie's httpOnly flag. Default false.
-func CookieNoHttpOnly() Option {
+// CookieHttpOnly unset csrf cookie's httpOnly flag.
+func CookieHttpOnly(httpOnly bool) Option {
 	return func(m *CsrfManager) error {
-		m.cookie.HttpOnly = false
+		m.cookie.HttpOnly = httpOnly
 		return nil
 	}
 }
@@ -83,33 +83,56 @@ func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
 // CsrfManager use nosurf's double submit cookie to defense CSRF attack.
 // Optional depends on fallback to render custom error page.
 type CsrfManager struct {
+	options         []Option
 	manualVerify    bool
 	cookie          http.Cookie
 	fallbackHandler jimu.FallbackHandler
 }
 
 // New create CsrfManager.
-func New(options ...Option) (*CsrfManager, error) {
-
-	ret := &CsrfManager{
-		cookie: http.Cookie{
-			Path:     "/",
-			HttpOnly: true,
+func New() *CsrfManager {
+	return &CsrfManager{
+		options: []Option{
+			CookiePath("/"),
+			CookieHttpOnly(true),
+			FallbackHandler(jimu.DefaultFallbackHandler),
 		},
-		fallbackHandler: jimu.DefaultFallbackHandler,
 	}
-	for _, op := range options {
-		if err := op(ret); err != nil {
-			return nil, err
+}
+
+func (m *CsrfManager) configured() bool {
+	return m.fallbackHandler != nil
+}
+
+// Options add options to the manager.
+func (m *CsrfManager) Options(options ...Option) {
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	m.options = append(m.options, options...)
+}
+
+// New create CsrfManager.
+func (m *CsrfManager) Configure() error {
+
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	for _, op := range m.options {
+		if err := op(m); err != nil {
+			return err
 		}
 	}
-	return ret, nil
+	return nil
 
 }
 
 // Wrap is the middleware.
 func (m *CsrfManager) Wrap(next http.Handler) http.Handler {
 
+	if !m.configured() {
+		panic(jimu.ErrComponentNotConfigured)
+	}
 	mw := nosurf.New(next)
 	mw.SetBaseCookie(m.cookie)
 	if m.manualVerify {

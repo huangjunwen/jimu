@@ -3,6 +3,7 @@ package jimu
 
 import (
 	"context"
+	"errors"
 	"net/http"
 )
 
@@ -28,3 +29,9 @@ var DefaultFallbackHandler = func(w http.ResponseWriter, _ *http.Request, msg st
 	}
 	http.Error(w, msg, status)
 }
+
+// Some common errors.
+var (
+	ErrComponentNotConfigured = errors.New("Component not configured")
+	ErrComponentConfigured    = errors.New("Component configured")
+)

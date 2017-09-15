@@ -19,7 +19,7 @@ const (
 	DefaultLogoutHeaderName = "Reftoken-Logout"
 )
 
-// Option is the option to to create RefTokenManager.
+// Option is the option of RefTokenManager.
 type Option func(*RefTokenManager) error
 
 // Store set the kv store to use in RefTokenManager (required).
@@ -165,6 +165,7 @@ func DefaultRules() Option {
 // RefTokenManager stores information to translate between external ref tokens
 // and internal real tokens. See: https://www.slideshare.net/opencredo/authentication-in-microservice-systems-david-borsos
 type RefTokenManager struct {
+	options []Option
 	// stores refToken -> realToken mapping with ttl.
 	store KVStore
 
@@ -187,40 +188,64 @@ type RefTokenManager struct {
 }
 
 // New create RefTokenManager.
-func New(options ...Option) (*RefTokenManager, error) {
-
-	ret := &RefTokenManager{}
-	ops := []Option{
-		TokenLength(DefaultTokenLength),
-		TTL(DefaultTTL),
-		TTLHeaderName(DefaultTTLHeaderName),
-		LogoutHeaderName(DefaultLogoutHeaderName),
+func New() *RefTokenManager {
+	return &RefTokenManager{
+		options: []Option{
+			TokenLength(DefaultTokenLength),
+			TTL(DefaultTTL),
+			TTLHeaderName(DefaultTTLHeaderName),
+			LogoutHeaderName(DefaultLogoutHeaderName),
+		},
 	}
-	ops = append(ops, options...)
-	for _, op := range ops {
-		if err := op(ret); err != nil {
-			return nil, err
+}
+
+func (m *RefTokenManager) configured() bool {
+	return m.store != nil
+}
+
+// Options add options to the manager.
+func (m *RefTokenManager) Options(options ...Option) {
+
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	m.options = append(m.options, options...)
+
+}
+
+// Configure the manager. Options are not allowed to add after configure.
+func (m *RefTokenManager) Configure() error {
+
+	if m.configured() {
+		panic(jimu.ErrComponentConfigured)
+	}
+	for _, op := range m.options {
+		if err := op(m); err != nil {
+			return err
 		}
 	}
 
-	if ret.store == nil {
-		return nil, fmt.Errorf("No Store in RefTokenManager")
+	if m.store == nil {
+		return fmt.Errorf("No Store in RefTokenManager")
 	}
-	if ret.loggerGetter == nil {
-		return nil, fmt.Errorf("No LoggerGetter in RefTokenManager")
+	if m.loggerGetter == nil {
+		return fmt.Errorf("No LoggerGetter in RefTokenManager")
 	}
-	if len(ret.ref2RealRules) == 0 {
-		return nil, fmt.Errorf("No Ref2RealRule in RefTokenManager")
+	if len(m.ref2RealRules) == 0 {
+		return fmt.Errorf("No Ref2RealRule in RefTokenManager")
 	}
-	if len(ret.real2RefRules) == 0 {
-		return nil, fmt.Errorf("No Real2RefRule in RefTokenManager")
+	if len(m.real2RefRules) == 0 {
+		return fmt.Errorf("No Real2RefRule in RefTokenManager")
 	}
-	return ret, nil
+	return nil
 
 }
 
 // Wrap is the middleware.
 func (m *RefTokenManager) Wrap(next http.Handler) http.Handler {
+	if !m.configured() {
+		panic(jimu.ErrComponentNotConfigured)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.serve(w, r, next)
 	})
