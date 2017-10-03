@@ -22,6 +22,18 @@ func ParamsFromContext(ctx context.Context) denco.Params {
 	return p
 }
 
+// unescapeParams unescape path params.
+func unescapeParams(params denco.Params) error {
+	for i := 0; i < len(params); i++ {
+		s, err := url.PathUnescape(params[i].Value)
+		if err != nil {
+			return err
+		}
+		params[i].Value = s
+	}
+	return nil
+}
+
 // Option for configuring Router.
 type Option func(*Router) error
 
@@ -124,19 +136,27 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		panic(jimu.ErrComponentNotConfigured)
 	}
 
-	data, params, found := r.router.Lookup(req.URL.Path)
+	// Match against path.
+	data, params, found := r.router.Lookup(req.URL.EscapedPath())
 	if !found {
 		r.fallbackHandler(w, req, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 
+	// Match against method.
 	handler, found2 := data.(map[string]http.Handler)[req.Method]
 	if !found2 {
 		r.fallbackHandler(w, req, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
+	// Unescape path params.
+	if err := unescapeParams(params); err != nil {
+		r.fallbackHandler(w, req, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
+
 	handler.ServeHTTP(w, req)
 	return
 }
@@ -197,13 +217,22 @@ func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, msg str
 		panic(jimu.ErrComponentNotConfigured)
 	}
 
-	data, params, found := r.router.Lookup(req.URL.Path)
-	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
-	if !found {
-		jimu.DefaultFallbackHandler(w, req, msg, status)
+	// Route the fallback handler.
+	var h jimu.FallbackHandler = jimu.DefaultFallbackHandler
+	data, params, found := r.router.Lookup(req.URL.EscapedPath())
+	if found {
+		h = data.(jimu.FallbackHandler)
+	}
+
+	// Unescape params.
+	if err := unescapeParams(params); err != nil {
+		h(w, req, "", http.StatusBadRequest)
 		return
 	}
-	data.(jimu.FallbackHandler)(w, req, msg, status)
+	req = req.WithContext(context.WithValue(req.Context(), paramsCtxKey, params))
+
+	// Run the fallbac handler.
+	h(w, req, msg, status)
 	return
 }
 
