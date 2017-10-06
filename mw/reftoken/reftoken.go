@@ -45,6 +45,17 @@ func LoggerGetter(loggerGetter jimu.LoggerGetter) Option {
 	}
 }
 
+// FallbackHandler set the FallbackHandler for RefTokenManager.
+func FallbackHandler(fallbackHandler jimu.FallbackHandler) Option {
+	return func(m *RefTokenManager) error {
+		if fallbackHandler == nil {
+			return fmt.Errorf("FallbackHandler is nil")
+		}
+		m.fallbackHandler = fallbackHandler
+		return nil
+	}
+}
+
 // TokenLength set the ref token's length (before base64 encode).
 func TokenLength(l int) Option {
 	return func(m *RefTokenManager) error {
@@ -176,6 +187,9 @@ type RefTokenManager struct {
 	// Logger getter.
 	loggerGetter jimu.LoggerGetter
 
+	// FallbackHandler.
+	fallbackHandler jimu.FallbackHandler
+
 	// Default ttl in seconds when storing data.
 	ttl int
 
@@ -191,6 +205,7 @@ type RefTokenManager struct {
 func New() *RefTokenManager {
 	return &RefTokenManager{
 		options: []Option{
+			FallbackHandler(jimu.DefaultFallbackHandler),
 			TokenLength(DefaultTokenLength),
 			TTL(DefaultTTL),
 			TTLHeaderName(DefaultTTLHeaderName),
@@ -256,7 +271,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 	lg := m.loggerGetter(r.Context())
 
 	// Apply ref 2 real token rules. Return ref tokens.
-	applyRulesToRequest := func() []string {
+	applyRulesToRequest := func() ([]string, error) {
 
 		realTokenHeaderNames := []string{}
 		refTokens := []string{}
@@ -284,7 +299,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 
 		// Ref token not found.
 		if len(refTokens) == 0 {
-			return nil
+			return nil, nil
 		}
 
 		// Translate ref tokens to real tokens.
@@ -302,7 +317,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 				"error", err,
 				"message", fmt.Sprintf("store.Get(%v)", refTokens),
 			)
-			return nil
+			return nil, err
 		}
 
 		lg.Log(
@@ -328,38 +343,38 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			existRefTokens = append(existRefTokens, refTokens[i])
 		}
 
-		return existRefTokens
+		return existRefTokens, nil
 
 	}
 
-	existRefTokens := applyRulesToRequest()
+	existRefTokens, err := applyRulesToRequest()
+	if err != nil {
+		m.fallbackHandler(w, r, "", http.StatusInternalServerError)
+		return
+	}
 
-	handleLogout := func(h http.Header) {
-		if _, ok := h[m.logoutHeaderName]; !ok {
-			return
-		}
+	applyRulesToResponseHeader := func(h http.Header) error {
+
+		// First handle logout process.
+		_, hasLogoutHeader := h[m.logoutHeaderName]
 		delete(h, m.logoutHeaderName)
-
-		lg.Log(
-			"level", "debug",
-			"src", "reftoken",
-			"message", fmt.Sprintf("store.Del(%v)", existRefTokens),
-		)
-
-		if err := m.store.Del(existRefTokens); err != nil {
+		if hasLogoutHeader {
 			lg.Log(
-				"level", "error",
+				"level", "debug",
 				"src", "reftoken",
 				"message", fmt.Sprintf("store.Del(%v)", existRefTokens),
-				"error", err,
 			)
+
+			if err := m.store.Del(existRefTokens); err != nil {
+				lg.Log(
+					"level", "error",
+					"src", "reftoken",
+					"message", fmt.Sprintf("store.Del(%v)", existRefTokens),
+					"error", err,
+				)
+				return err
+			}
 		}
-
-	}
-
-	applyRulesToResponseHeader := func(h http.Header) {
-
-		handleLogout(h)
 
 		// Since headers here are already canonical, no need to
 		// call h.Get()
@@ -376,6 +391,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 		if ttl <= 0 {
 			ttl = m.ttl
 		}
+		delete(h, m.ttlHeaderName)
 
 		refTokenSetters := []RefTokenSetter{}
 		refTokens := []string{}
@@ -407,7 +423,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 		}
 
 		if len(refTokens) == 0 {
-			return
+			return nil
 		}
 
 		lg.Log(
@@ -423,18 +439,23 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 				"error", err,
 				"message", fmt.Sprintf("store.Set(%v, %d)", kvs, ttl),
 			)
-			return
+			return err
 		}
 
 		for i, refToken := range refTokens {
 			refTokenSetters[i](h, refToken)
 		}
 
+		return nil
+
 	}
 
 	next.ServeHTTP(&responseWriterProxy{
 		ResponseWriter: w,
 		headerModifier: applyRulesToResponseHeader,
+		errHandler: func(rw http.ResponseWriter, msg string, code int) {
+			m.fallbackHandler(rw, r, msg, code)
+		},
 	}, r)
 
 }
@@ -452,26 +473,42 @@ func (m *RefTokenManager) generateRefToken(_ string) string {
 
 type responseWriterProxy struct {
 	http.ResponseWriter
-	headerWrote    bool
-	headerModifier func(http.Header)
+	headerWrote         bool
+	headerModifier      func(http.Header) error
+	headerModifierError error
+	errHandler          func(http.ResponseWriter, string, int)
 }
 
 // WriteHeader implement http.ResponseWriter interface.
 func (rw *responseWriterProxy) WriteHeader(status int) {
-
+	// Ensure only called once.
 	if rw.headerWrote {
 		return
 	}
-
 	rw.headerWrote = true
-	rw.headerModifier(rw.ResponseWriter.Header())
-	rw.ResponseWriter.WriteHeader(status)
+
+	// Run the modifier, if error occured, errHandler will be used instead
+	// of normal process.
+	rw.headerModifierError = rw.headerModifier(rw.ResponseWriter.Header())
+	if rw.headerModifierError == nil {
+		rw.ResponseWriter.WriteHeader(status)
+	} else {
+		errHandler := rw.errHandler
+		if errHandler == nil {
+			errHandler = http.Error
+		}
+		errHandler(rw.ResponseWriter, "", http.StatusInternalServerError)
+	}
 
 }
 
 // Write implement http.ResponseWriter interface.
 func (rw *responseWriterProxy) Write(content []byte) (int, error) {
 	rw.WriteHeader(http.StatusOK)
+	if rw.headerModifierError != nil {
+		// If error has occured, do nothing.
+		return 0, rw.headerModifierError
+	}
 	return rw.ResponseWriter.Write(content)
 }
 
