@@ -111,13 +111,11 @@ func Output(w io.Writer) Option {
 	}
 }
 
-// ConsoleOutput set logging's using zerolog.ConsoleWriter.
-func ConsoleOutput(w io.Writer, noColor bool) Option {
-	if w == nil {
-		w = os.Stderr
-	}
+// ConsoleOutput indicate to use zerolog.ConsoleWriter.
+func ConsoleOutput(noColor bool) Option {
 	return func(m *LoggerManager) error {
-		m.output = zerolog.ConsoleWriter{Out: w, NoColor: noColor}
+		m.consoleOutput = true
+		m.consoleOutputNoColor = noColor
 		return nil
 	}
 }
@@ -133,11 +131,13 @@ func ExtraField(field string, fieldExtractor func(*http.Request) string) Option 
 
 // LoggerManager adds zerolog's json logger to context and log http requests.
 type LoggerManager struct {
-	options         []Option
-	output          io.Writer
-	fields          []string
-	fieldExtractors []func(*http.Request) string
-	logger          zerolog.Logger
+	options              []Option
+	output               io.Writer
+	consoleOutput        bool
+	consoleOutputNoColor bool
+	fields               []string
+	fieldExtractors      []func(*http.Request) string
+	logger               zerolog.Logger
 }
 
 // New create LoggerManager.
@@ -172,7 +172,11 @@ func (m *LoggerManager) Configure() error {
 			return err
 		}
 	}
-	m.logger = zerolog.New(m.output).With().Timestamp().Logger()
+	output := m.output
+	if m.consoleOutput {
+		output = zerolog.ConsoleWriter{Out: output, NoColor: m.consoleOutputNoColor}
+	}
+	m.logger = zerolog.New(output).With().Timestamp().Logger()
 	return nil
 
 }
