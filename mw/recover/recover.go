@@ -107,6 +107,7 @@ func (m *RecoverManager) Wrap(next http.Handler) http.Handler {
 					"src", "recover",
 					"error", rcv,
 					"tb", string(debug.Stack()),
+					"message", "panic",
 				)
 			}
 

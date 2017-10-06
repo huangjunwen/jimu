@@ -299,7 +299,8 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			lg.Log(
 				"level", "error",
 				"src", "reftoken",
-				"error", fmt.Errorf("store.Get(%v): %s", refTokens, err),
+				"error", err,
+				"message", fmt.Sprintf("store.Get(%v)", refTokens),
 			)
 			return nil
 		}
@@ -349,7 +350,8 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 			lg.Log(
 				"level", "error",
 				"src", "reftoken",
-				"error", fmt.Errorf("store.Del(%v): %s", existRefTokens, err),
+				"message", fmt.Sprintf("store.Del(%v)", existRefTokens),
+				"error", err,
 			)
 		}
 
@@ -411,7 +413,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 		lg.Log(
 			"level", "debug",
 			"src", "reftoken",
-			"message", fmt.Sprintf("store.set(%v, %d)", kvs, ttl),
+			"message", fmt.Sprintf("store.Set(%v, %d)", kvs, ttl),
 		)
 
 		if err := m.store.Set(kvs, ttl); err != nil {
@@ -419,6 +421,7 @@ func (m *RefTokenManager) serve(w http.ResponseWriter, r *http.Request, next htt
 				"level", "error",
 				"src", "reftoken",
 				"error", err,
+				"message", fmt.Sprintf("store.Set(%v, %d)", kvs, ttl),
 			)
 			return
 		}

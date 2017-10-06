@@ -216,7 +216,7 @@ func (m *LoggerManager) Wrap(next http.Handler) http.Handler {
 				ev = ev.Str(field, v)
 			}
 		}
-		ev.Msg("")
+		ev.Msg("HTTP")
 
 	})
 	mw3 := hlog.RequestIDHandler("reqid", "")
