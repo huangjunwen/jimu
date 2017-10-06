@@ -34,16 +34,14 @@ func unescapeParams(params denco.Params) error {
 	return nil
 }
 
-// requestRawPath return the unmodified path of a request.
-// Since http.Request.URL.Path is unescaped. Also see:
+// requestRawPath return the unmodified path of a request. Also see:
 // https://github.com/dimfeld/httptreemux#requesturi-vs-urlpath
 func requestRawPath(r *http.Request) string {
-	path := r.RequestURI
-	i := strings.IndexAny(path, "?#") // also find fragment part
-	if i < 0 {
-		return path
+	// We don't need to use r.URL.EscapedPath since RawPath was parsed.
+	if r.URL.RawPath != "" {
+		return r.URL.RawPath
 	}
-	return path[:i]
+	return r.URL.Path
 }
 
 // Option for configuring Router.
