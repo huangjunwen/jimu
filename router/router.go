@@ -34,6 +34,18 @@ func unescapeParams(params denco.Params) error {
 	return nil
 }
 
+// requestRawPath return the unmodified path of a request.
+// Since http.Request.URL.Path is unescaped. Also see:
+// https://github.com/dimfeld/httptreemux#requesturi-vs-urlpath
+func requestRawPath(r *http.Request) string {
+	path := r.RequestURI
+	i := strings.IndexAny(path, "?#") // also find fragment part
+	if i < 0 {
+		return path
+	}
+	return path[:i]
+}
+
 // Option for configuring Router.
 type Option func(*Router) error
 
@@ -137,7 +149,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Match against path.
-	data, params, found := r.router.Lookup(req.URL.EscapedPath())
+	data, params, found := r.router.Lookup(requestRawPath(req))
 	if !found {
 		r.fallbackHandler(w, req, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
@@ -219,7 +231,7 @@ func (r *FallbackRouter) Serve(w http.ResponseWriter, req *http.Request, msg str
 
 	// Route the fallback handler.
 	var h jimu.FallbackHandler = jimu.DefaultFallbackHandler
-	data, params, found := r.router.Lookup(req.URL.EscapedPath())
+	data, params, found := r.router.Lookup(requestRawPath(req))
 	if found {
 		h = data.(jimu.FallbackHandler)
 	}
