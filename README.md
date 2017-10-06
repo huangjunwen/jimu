@@ -10,6 +10,5 @@ A collection of middlewares and http utilites. Some are thin wrappers from other
 | mw | Middleware directory |
 | mw/logger | Thin wrapper of [zerolog](https://github.com/rs/zerolog) |
 | mw/recover | Catch panic and fallback response |
-| mw/csrf | Thin wrapper of [nosurf](https://github.com/justinas/nosurf) |
 | mw/reftoken | Middleware that translate tokens transparently. Can be used as session. |
 
